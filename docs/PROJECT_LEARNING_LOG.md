@@ -346,3 +346,71 @@ Bốn cleaning decisions trong mục 14 có status **PENDING INDEPENDENT REVIEW*
 **Stage 2 — PostgreSQL & Data Modeling**
 
 **DO NOT START UNTIL STAGE 1 REVIEW IS APPROVED.**
+
+## Stage 1 Independent Review Fixes
+
+Independent review là một lần kiểm tra bởi reviewer khác với người viết
+pipeline. Mục tiêu là tìm semantic bug và edge case mà unit tests ban đầu có
+thể chưa bao phủ. Gravity kết luận Stage 1 **READY WITH CONDITIONS** và yêu
+cầu ba điều chỉnh trước khi đóng review.
+
+### 1. Tách customer return khỏi inventory adjustment
+
+Quantity `< 0` không tự động có nghĩa là customer return. Review xác nhận
+3,393 rows negative non-C có `Price = 0` và thiếu `Customer ID`, phù hợp với
+warehouse shrinkage/write-off hơn là hành vi trả hàng của customer.
+
+Vì vậy implementation hiện tại dùng:
+
+- Invoice prefix `C` → `is_return = True`, `is_cancellation = True`,
+  `is_inventory_adjustment = False`.
+- Negative Quantity + non-C + `Price = 0` + missing Customer ID →
+  `is_inventory_adjustment = True`, `is_return = False`.
+
+Các rows vẫn được giữ lại. Điều này bảo vệ return-rate calculation khỏi việc
+đếm nhầm write-off nội bộ như customer return.
+
+### 2. Normalize StockCode trước classification
+
+`StockCode` được chuyển sang nullable `string`, strip whitespace và uppercase
+trước khi classification. Missing value vẫn là `<NA>`, không bị biến thành
+literal `"NAN"`. Normalization giúp `test002`, `cRuK` và các biến thể có
+whitespace được xử lý nhất quán.
+
+### 3. Explicit special-code patterns
+
+Classification không dùng rule nguy hiểm “StockCode không bắt đầu bằng số là
+non-product”. Các code/pattern được review xác nhận được nhận diện explicit:
+
+- `TEST002`
+- `CRUK`
+- `ADJUST2`
+- prefix `GIFT_0001_...`
+
+Product-like code như `DCGS0058` không bị loại chỉ vì có chữ. Đây là ví dụ
+quan trọng cho việc classification phải dựa trên evidence và business
+vocabulary, không dựa trên heuristic hình thức.
+
+### 4. Regression testing và pipeline verification
+
+Regression testing là chạy lại các behavior đã được chấp nhận sau khi sửa
+implementation, để phát hiện bug mới hoặc metric thay đổi ngoài ý muốn.
+Tests mới kiểm tra:
+
+- C invoice âm là return nhưng không phải inventory adjustment;
+- negative non-C zero-price thiếu customer là inventory adjustment nhưng không
+  phải return;
+- normal sale không có hai flag;
+- StockCode mixed-case được uppercase;
+- gift voucher pattern, `TEST002`, `CRUK`, `ADJUST2`;
+- missing StockCode vẫn là nullable missing;
+- `DCGS...` không bị đánh dấu non-product do heuristic.
+
+Sau tests, pipeline được chạy lại từ checksum-valid Parquet cache thay vì đọc
+Excel lại. Validation sau khi ghi và đọc lại processed Parquet phải pass,
+row reconciliation và date range phải giữ nguyên. Thay đổi có chủ đích sau
+fix là semantic count của `is_return`: nó không còn bao gồm 3,393 inventory
+adjustments.
+
+**Review status: CONDITIONS ADDRESSED — chờ reviewer xác nhận lại trước khi
+bắt đầu Stage 2.**
