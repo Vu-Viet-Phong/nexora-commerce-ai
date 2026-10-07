@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment and local configuration
+.env
+.env.*
+!.env.example
+
+# Notebooks and test/tool caches
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Build and packaging artifacts
+build/
+dist/
+*.egg-info/
+
+# Large model and checkpoint files
+*.bin
+*.ckpt
+*.h5
+*.joblib
+*.onnx
+*.pkl
+*.pt
+*.pth
+*.safetensors
+models/
+checkpoints/
+
+# Data files: raw data is immutable; derived data is generated
+data/raw/*
+data/interim/*
+data/processed/*
+!data/raw/**/
+!data/raw/**/.gitkeep
+!data/interim/**/
+!data/interim/**/.gitkeep
+!data/processed/**/
+!data/processed/**/.gitkeep

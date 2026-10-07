@@ -1,0 +1,19 @@
+project:
+  name: Nexora-Commerce-AI
+  stage: "0-1"
+
+paths:
+  raw_data: data/raw
+  interim_data: data/interim
+  processed_data: data/processed
+  notebooks: notebooks
+  docs: docs
+
+data:
+  source: Online Retail II
+  raw_data_immutable: true
+  source_directory: data/raw/uci
+
+logging:
+  level: INFO
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
