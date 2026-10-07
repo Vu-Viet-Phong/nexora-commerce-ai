@@ -99,6 +99,7 @@ def run_stage1(
         "removal_reasons": {"cross_sheet_exact_duplicate": cross_removed},
         "rows_retained_flagged": int((~cleaned["is_valid_sale"]).sum()),
         "cancellations": int(cleaned["is_cancellation"].sum()),
+        "returns": int(cleaned["is_return"].sum()),
         "inventory_adjustments": int(cleaned["is_inventory_adjustment"].sum()),
         "bad_debt_adjustments": int(cleaned["is_bad_debt_adjustment"].sum()),
         "missing_customer_id": int((~cleaned["has_customer_id"]).sum()),

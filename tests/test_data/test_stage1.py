@@ -20,7 +20,7 @@ def test_cross_sheet_duplicates_are_deduplicated_but_within_sheet_are_flagged():
     duplicate = _row("1")
     sheets = {
         "a": pd.DataFrame([duplicate, duplicate]),
-        "b": pd.DataFrame([duplicate, _row("2", -1)]),
+        "b": pd.DataFrame([duplicate, _row("C2", -1)]),
     }
     cleaned = clean_data(sheets)
     assert len(cleaned) == 3
@@ -59,11 +59,28 @@ def test_business_flags_cover_audit_cases():
     )
     cleaned = clean_data({"sheet": frame})
     assert cleaned.loc[0, "is_cancellation"]
+    assert cleaned.loc[0, "is_return"]
+    assert not cleaned.loc[0, "is_inventory_adjustment"]
     assert cleaned.loc[1, "is_negative_quantity"]
+    assert not cleaned.loc[1, "is_return"]
     assert cleaned.loc[2, "is_bad_debt_adjustment"]
     assert cleaned.loc[3, "is_inventory_adjustment"]
     assert cleaned.loc[3, "is_non_product"]
     assert cleaned.loc[4, "is_price_negative"]
+
+
+def test_stock_codes_are_normalized_and_special_codes_are_explicit():
+    values = [" gift_0001_abc ", "test002", "cRuK", " adjust2 ", "DCGS0058", None]
+    frame = pd.DataFrame(
+        [dict(zip(ORIGINAL_COLUMNS, [str(index), value, "Widget", 1, "2011-01-01", 2.0, 12345, "UK"]))
+         for index, value in enumerate(values)]
+    )
+    cleaned = clean_data({"sheet": frame})
+    assert cleaned["StockCode"].tolist()[:5] == ["GIFT_0001_ABC", "TEST002", "CRUK", "ADJUST2", "DCGS0058"]
+    assert cleaned.loc[:3, "is_non_product"].all()
+    assert not cleaned.loc[4, "is_non_product"]
+    assert pd.isna(cleaned.loc[5, "StockCode"])
+    assert not cleaned.loc[5, "is_non_product"]
 
 
 def test_missing_customer_and_description_are_retained_and_flagged():

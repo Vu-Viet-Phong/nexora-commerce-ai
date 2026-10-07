@@ -10,8 +10,9 @@ from .ingest import ORIGINAL_COLUMNS
 
 KNOWN_NON_PRODUCT_CODES = {
     "POST", "DOT", "M", "C2", "D", "S", "BANK CHARGES", "ADJUST",
-    "AMAZONFEE", "GIFT VOUCHER", "TEST001",
+    "AMAZONFEE", "GIFT VOUCHER", "TEST001", "TEST002", "CRUK", "ADJUST2",
 }
+KNOWN_NON_PRODUCT_PREFIXES = ("GIFT_0001_",)
 
 
 def _as_frame(data: Mapping[str, pd.DataFrame] | pd.DataFrame) -> pd.DataFrame:
@@ -30,7 +31,8 @@ def clean_data(data: Mapping[str, pd.DataFrame] | pd.DataFrame) -> pd.DataFrame:
         frame["source_sheet"] = "unknown"
 
     frame["Invoice"] = frame["Invoice"].astype("string").str.strip()
-    frame["StockCode"] = frame["StockCode"].astype("string").str.strip()
+    # Chuẩn hóa nhưng vẫn giữ missing StockCode là <NA>, không thành "NAN".
+    frame["StockCode"] = frame["StockCode"].astype("string").str.strip().str.upper()
     frame["Description"] = frame["Description"].astype("string").str.strip()
     frame["Country"] = frame["Country"].astype("string").str.strip()
     frame["Quantity"] = pd.to_numeric(frame["Quantity"], errors="coerce")
@@ -56,7 +58,7 @@ def clean_data(data: Mapping[str, pd.DataFrame] | pd.DataFrame) -> pd.DataFrame:
     frame["is_cancellation"] = invoice_upper.str.startswith("C", na=False)
     frame["is_bad_debt_adjustment"] = invoice_upper.str.startswith("A", na=False)
     frame["is_negative_quantity"] = frame["Quantity"].lt(0).fillna(False)
-    frame["is_return"] = frame["is_negative_quantity"]
+    frame["is_return"] = frame["is_cancellation"]
     frame["is_inventory_adjustment"] = (
         frame["is_negative_quantity"]
         & ~frame["is_cancellation"]
@@ -68,11 +70,10 @@ def clean_data(data: Mapping[str, pd.DataFrame] | pd.DataFrame) -> pd.DataFrame:
     frame["has_valid_price"] = frame["Price"].gt(0).fillna(False)
     frame["is_price_zero"] = frame["Price"].eq(0)
     frame["is_price_negative"] = frame["Price"].lt(0).fillna(False)
-    frame["is_non_product"] = stock_upper.isin(KNOWN_NON_PRODUCT_CODES)
-    frame["is_unknown_special_code"] = (
-        frame["StockCode"].notna() & ~frame["is_non_product"]
-        & ~stock_upper.str.match(r"^\d", na=False)
+    frame["is_non_product"] = stock_upper.isin(KNOWN_NON_PRODUCT_CODES) | stock_upper.str.startswith(
+        KNOWN_NON_PRODUCT_PREFIXES, na=False
     )
+    frame["is_unknown_special_code"] = False
     frame["is_valid_sale"] = (
         ~frame["is_cancellation"] & ~frame["is_bad_debt_adjustment"]
         & frame["Quantity"].gt(0) & frame["has_valid_price"]
