@@ -43,9 +43,9 @@ models/
 checkpoints/
 
 # Data files: raw data is immutable; derived data is generated
-data/raw/*
-data/interim/*
-data/processed/*
+data/raw/**
+data/interim/**
+data/processed/**
 !data/raw/**/
 !data/raw/**/.gitkeep
 !data/interim/**/
