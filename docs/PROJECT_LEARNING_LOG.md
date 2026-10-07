@@ -414,3 +414,36 @@ adjustments.
 
 **Review status: CONDITIONS ADDRESSED — chờ reviewer xác nhận lại trước khi
 bắt đầu Stage 2.**
+
+## Stage 1 Final Approval
+
+Independent Reviewer (Gravity) đã hoàn tất final re-review và kết luận:
+
+**READY — STAGE 1 APPROVED**
+
+Ba conditions đã được xử lý và xác nhận:
+
+1. `is_return` chỉ phản ánh cancellation/customer return có invoice prefix
+   `C`; negative non-C được tách thành `is_inventory_adjustment`.
+2. `StockCode` được normalize thành nullable uppercase string trước
+   classification, trong khi missing vẫn giữ là `<NA>`.
+3. Special-code classification nhận diện explicit `GIFT_0001_*`, `TEST002`,
+   `CRUK` và `ADJUST2`, đồng thời không dùng heuristic loại `DCGS...`
+   product-like codes.
+
+Final verification ghi nhận 7/7 tests pass, validation pass, row
+reconciliation `1,067,371 - 22,523 = 1,044,848`, và processed Parquet reload
+thành công. Raw checksum vẫn khớp manifest và raw Excel vẫn immutable.
+
+Known limitations còn lại:
+
+- Dataset không có line-level unique identifier; within-sheet duplicates
+  tiếp tục được retain + flag.
+- Special-code classification vẫn là business vocabulary cần review khi có
+  thêm domain evidence.
+- Stage 1 tests là focused tests, chưa phải exhaustive/property-based
+  coverage.
+
+Stage 1 được phép chuyển sang **Stage 2 — PostgreSQL & Data Modeling**.
+Stage 2 phải tiếp tục theo workflow milestone: implement, verify, update log,
+commit, push và xác nhận local `main` đồng bộ với `origin/main`.
