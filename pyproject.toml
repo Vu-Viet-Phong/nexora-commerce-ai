@@ -12,6 +12,8 @@ dependencies = [
     "numpy",
     "openpyxl",
     "pyarrow",
+    "SQLAlchemy",
+    "psycopg[binary]",
 ]
 
 [project.optional-dependencies]

@@ -447,3 +447,177 @@ Known limitations còn lại:
 Stage 1 được phép chuyển sang **Stage 2 — PostgreSQL & Data Modeling**.
 Stage 2 phải tiếp tục theo workflow milestone: implement, verify, update log,
 commit, push và xác nhận local `main` đồng bộ với `origin/main`.
+
+---
+
+## Milestone 2.1 — PostgreSQL Development Environment
+
+### Objective
+
+Tạo môi trường PostgreSQL reproducible cho Stage 2 mà không yêu cầu mỗi
+developer phải tự cài PostgreSQL theo cách riêng.
+
+### Why This Matters
+
+Stage 2 cần một database thật để kiểm tra schema, foreign key, transaction,
+loader idempotency và SQL marts. Docker Compose mô tả database bằng code, giúp
+những lần chạy sau dùng cùng image, port, biến môi trường và healthcheck.
+
+### Input
+
+- Cấu hình project hiện có trong `pyproject.toml`.
+- Các biến môi trường PostgreSQL do developer cung cấp qua `.env`.
+
+### Output
+
+- `deployment/docker-compose.yml` với PostgreSQL 16 và named volume.
+- `.env.example` với placeholder cho database configuration.
+- Dependencies `SQLAlchemy` và `psycopg[binary]`.
+
+### Files Created / Modified
+
+- `deployment/docker-compose.yml`: định nghĩa service PostgreSQL,
+  healthcheck, port mapping và persistent development volume.
+- `.env.example`: ghi lại tên biến cần thiết, không chứa secret thật.
+- `pyproject.toml`: khai báo SQLAlchemy và psycopg cho database access ở các
+  milestone sau.
+- `docs/PROJECT_LEARNING_LOG.md`: ghi lại design và validation của milestone.
+
+### Concepts Learned
+
+- **Relational database**: database lưu dữ liệu trong các bảng có quan hệ
+  logic, phù hợp để biểu diễn customers, invoices và invoice lines ở Stage 2.
+- **PostgreSQL**: hệ quản trị cơ sở dữ liệu quan hệ được chọn cho môi trường
+  phát triển và các constraint SQL thực tế.
+- **Docker Compose**: file YAML mô tả một hoặc nhiều container có thể khởi tạo
+  bằng cùng một cấu hình, làm môi trường local reproducible hơn.
+- **DATABASE_URL**: chuỗi kết nối tập trung thông tin driver, user, password,
+  host, port và database để code không hard-code connection details.
+- **Environment variables**: cấu hình runtime tách khỏi source code. Password
+  thật chỉ nằm trong `.env` local và `.env` bị gitignore; `.env.example` chỉ
+  dùng để hướng dẫn tên biến.
+
+### Implementation
+
+Flow:
+
+`.env` hoặc defaults local → Docker Compose interpolation → PostgreSQL
+container → healthcheck `pg_isready` → các milestone schema/loader sau.
+
+Service dùng `postgres:16`, map `POSTGRES_DB`, `POSTGRES_USER` và
+`POSTGRES_PASSWORD`, đồng thời lưu database vào named volume
+`postgres_data`. Healthcheck tránh coi container là ready trước khi server
+nhận connection.
+
+SQLAlchemy là database toolkit Python; psycopg là PostgreSQL driver. Chúng
+được khai báo ngay từ foundation để các milestone sau dùng cùng dependency
+stack thay vì thêm framework ORM không cần thiết.
+
+### Important Code
+
+```yaml
+healthcheck:
+  test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+```
+
+Compose dùng `$$` để truyền biến vào shell bên trong container thay vì
+interpolate sớm ở phía Compose. Vì vậy healthcheck kiểm tra đúng credentials
+runtime của service.
+
+### Design Decisions
+
+Decision: dùng PostgreSQL 16 và named volume, thay vì commit database files.
+
+Reason: image version được ghim ở major version để môi trường ổn định, còn
+volume giữ dữ liệu local giữa các lần restart.
+
+Trade-off: volume local cần được xóa thủ công khi muốn recreate database từ
+scratch; volume không được đưa vào Git.
+
+Decision: yêu cầu các biến PostgreSQL từ `.env` hoặc environment bên ngoài.
+
+Reason: Compose không chứa username/password mặc định, tránh biến cấu hình
+trông giống secret bị hard-code. `.env.example` chỉ cung cấp giá trị mẫu để
+developer copy và thay đổi khi cần.
+
+### Problems Encountered
+
+Docker CLI không có trong environment hiện tại, nên không thể khởi động
+container, chạy `docker compose config` hoặc chạy connection check thực tế
+trong milestone này.
+
+### Root Cause
+
+`docker --version` và `docker compose version` đều thất bại vì lệnh `docker`
+không tồn tại trên PATH của máy hiện tại.
+
+### Solution
+
+Đã kiểm tra nội dung Compose tĩnh và ghi nhận Docker runtime là prerequisite
+còn thiếu. Compose file dùng biến bắt buộc, healthcheck và environment-driven
+settings để có thể verify runtime khi Docker được cài.
+
+### Why The Solution Works
+
+Compose schema này chỉ có một PostgreSQL service, không phụ thuộc vào
+host-specific path và không lưu secret trong repository. Khi Docker khả dụng,
+`docker compose config` kiểm tra interpolation, còn `docker compose up -d`
+và `pg_isready` kiểm tra runtime readiness.
+
+### Tests / Validation
+
+- Interpreter system ban đầu: Python 3.9.2; `.venv` cũ cũng là Python 3.9.2.
+- Python 3.11.16 được xác nhận trong `vbpr_env`; không xóa hoặc sửa
+  environment thesis.
+- `.venv` đã được tái tạo project-specific bằng Python 3.11.16.
+- `.\.venv\Scripts\python.exe -m pip install -e '.[dev]'` hoàn tất từ
+  `pyproject.toml`.
+- Import `pandas`, `numpy`, `pyarrow`, `sqlalchemy`, `psycopg`, `pytest`:
+  PASS.
+- `.\.venv\Scripts\python.exe -m pytest tests/test_data/test_stage1.py`:
+  **7 passed**.
+- `.env.example` chỉ chứa giá trị mẫu, không chứa secret thật; `.env` vẫn
+  bị gitignore.
+- Đã kiểm tra `docker --version` và `docker compose version`; runtime
+  verification bị block vì Docker chưa được cài.
+
+### How To Run
+
+```powershell
+Copy-Item .env.example .env
+docker compose --env-file .env -f deployment/docker-compose.yml config
+docker compose --env-file .env -f deployment/docker-compose.yml up -d
+docker compose --env-file .env -f deployment/docker-compose.yml ps
+```
+
+### How To Verify
+
+Khi Docker khả dụng, service phải ở trạng thái healthy:
+
+```powershell
+docker compose --env-file .env -f deployment/docker-compose.yml ps
+docker compose --env-file .env -f deployment/docker-compose.yml exec postgres \
+  pg_isready -U $env:POSTGRES_USER -d $env:POSTGRES_DB
+```
+
+### Git Checkpoint
+
+Commit: pending
+
+Message: `feat(db): add PostgreSQL development environment`
+
+### What I Learned
+
+Database environment cũng là một phần của reproducible data system. Tách
+configuration khỏi code và có healthcheck giúp các bước schema/loader sau
+phát hiện database chưa sẵn sàng một cách rõ ràng.
+
+### Limitations
+
+Milestone này chưa tạo schema, chưa load Parquet và chưa kiểm tra connection
+thực tế vì Docker runtime không khả dụng.
+
+### Next Step
+
+Milestone 2.2 sẽ xác định grain của từng bảng và tạo PostgreSQL schema, PK/FK,
+indexes cùng ERD dựa trên dữ liệu Stage 1 thực tế.
