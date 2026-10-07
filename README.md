@@ -6,7 +6,8 @@ Nexora-Commerce-AI is an end-to-end E-Commerce Intelligence project covering dat
 
 ## Current development stage
 
-Stage 0-1: project setup, configuration, data foundation, ingestion, cleaning, validation, and initial data audit.
+Stage 1 complete: ingestion, checksum-aware interim cache, cleaning flags,
+validation, processed Parquet, manifest, summaries, tests, and initial audit.
 
 ## Project structure
 
@@ -17,9 +18,28 @@ Stage 0-1: project setup, configuration, data foundation, ingestion, cleaning, v
 - `tests/`: testing foundation
 - `docs/`: project and data documentation
 
-## Setup placeholder
+## Stage 1 pipeline
 
-Setup instructions will be added when the project dependencies and development workflow are defined.
+The raw workbook is never modified. The loader computes a SHA-256 checksum and
+reuses sheet-level caches with a manifest. Cleaning preserves within-sheet
+duplicates as quality flags, removes only exact cross-sheet repeats, and keeps
+returns/cancellations and missing values visible. Run the pipeline from the
+repository root:
+
+```python
+python -m src.data.pipeline
+```
+
+The first run reads the workbook once and creates a checksum-keyed cache.
+Later runs reuse the cache when the raw checksum is unchanged. Outputs are
+`data/interim/transactions_raw.parquet`,
+`data/interim/raw_manifest.json`,
+`data/processed/transactions_clean.parquet`, and
+`data/processed/cleaning_summary.json`. See `docs/data_audit.md` for observed
+facts and cleaning decisions.
+
+Project Development & Learning Log:
+[docs/PROJECT_LEARNING_LOG.md](docs/PROJECT_LEARNING_LOG.md)
 
 ## Data source placeholder
 
