@@ -1,0 +1,791 @@
+"""Database query layer for Nexora Commerce AI Analytics Dashboard.
+
+Provides read-only, parameterized queries to PostgreSQL SQL Marts
+(mart_daily_sales, mart_customer_daily, mart_customer_snapshot).
+Includes safe environment variable resolution, connection pooling,
+and graceful fallback handling for missing tables or empty datasets.
+"""
+
+from __future__ import annotations
+
+import datetime
+import os
+from datetime import date
+from pathlib import Path
+from typing import Any
+from urllib.parse import quote, unquote
+
+import numpy as np
+import pandas as pd
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError
+
+
+class DatabaseQueryError(Exception):
+    """Raised when a dashboard database query fails."""
+
+
+def load_env_config(env_path: Path | None = None) -> None:
+    """Safely load local environment variables from .env if present.
+
+    Does not overwrite existing process environment variables.
+    Never prints or logs values.
+    """
+    if env_path is None:
+        # Search from file location up to project root
+        env_path = Path(__file__).resolve().parents[1] / ".env"
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+
+
+def normalize_db_url(url: str) -> str:
+    """URL-encode password characters for SQLAlchemy while masking credentials in logs.
+
+    Handles special characters safely without leaking credentials.
+    """
+    marker = "@localhost:5432/"
+    if marker not in url:
+        return url
+    prefix, suffix = url.rsplit(marker, 1)
+    if "://" not in prefix or ":" not in prefix.split("://", 1)[1]:
+        return url
+    scheme, credentials = prefix.split("://", 1)
+    username, password = credentials.split(":", 1)
+    return f"{scheme}://{username}:{quote(unquote(password), safe='')}{marker}{suffix}"
+
+
+def get_engine(database_url: str | None = None, load_env: bool = True) -> Engine:
+    """Create and return a read-only SQLAlchemy engine with pre-ping validation.
+
+    Priority:
+    1. Explicit database_url argument
+    2. DATABASE_URL environment variable
+    3. NEXORA_DATABASE_URL environment variable
+    """
+    if load_env:
+        load_env_config()
+    target_url = (
+        database_url
+        or os.getenv("DATABASE_URL")
+        or os.getenv("NEXORA_DATABASE_URL")
+    )
+    if not target_url:
+        raise DatabaseQueryError(
+            "Database URL not configured. Please set DATABASE_URL in .env"
+        )
+    normalized = normalize_db_url(target_url)
+    try:
+        engine = create_engine(normalized, pool_pre_ping=True)
+        # Verify connection and read-only access (or just connection)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return engine
+    except Exception:
+        # Hide raw database exceptions and credentials from the user
+        raise DatabaseQueryError("Failed to connect to the database. Please verify credentials and network status.")
+
+# ============================================================================
+# FILTER METADATA QUERIES
+# ============================================================================
+
+def get_date_range(engine: Engine) -> tuple[date | None, date | None]:
+    """Retrieve min and max calendar days available in mart_daily_sales."""
+    query = text(
+        """
+        SELECT
+            MIN(calendar_day) AS min_date,
+            MAX(calendar_day) AS max_date
+        FROM mart_daily_sales
+        """
+    )
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(query).mappings().first()
+            if row and row["min_date"] and row["max_date"]:
+                # Convert string dates if necessary (e.g. from SQLite)
+                min_val = row["min_date"]
+                max_val = row["max_date"]
+                if isinstance(min_val, str):
+                    min_val = datetime.date.fromisoformat(min_val)
+                if isinstance(max_val, str):
+                    max_val = datetime.date.fromisoformat(max_val)
+                return min_val, max_val
+    except SQLAlchemyError as exc:
+        raise DatabaseQueryError(f"Failed to fetch date range: {exc}") from exc
+    return None, None
+
+
+def get_available_countries(engine: Engine) -> list[str]:
+    """Retrieve sorted list of distinct countries from mart_daily_sales."""
+    query = text(
+        """
+        SELECT DISTINCT country
+        FROM mart_daily_sales
+        ORDER BY country ASC
+        """
+    )
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(query).fetchall()
+            return [str(r[0]) for r in rows if r[0]]
+    except SQLAlchemyError as exc:
+        raise DatabaseQueryError(f"Failed to fetch countries: {exc}") from exc
+
+
+# ============================================================================
+# SALES ANALYTICS QUERIES (mart_daily_sales)
+# ============================================================================
+
+def get_sales_kpis(
+    engine: Engine,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    country: str | None = None,
+) -> dict[str, float]:
+    """Calculate aggregated Sales KPIs directly in PostgreSQL to save memory.
+    
+    Note: distinct_invoices is pre-aggregated at the (calendar_day, country, is_physical_merchandise)
+    grain. Summing it across classifications yields 'invoice segments', not unique global invoices,
+    because a single invoice containing both physical and service items is counted in both rows.
+    """
+    clauses = ["1=1"]
+    params: dict[str, Any] = {}
+
+    if start_date is not None:
+        clauses.append("calendar_day >= :start_date")
+        params["start_date"] = start_date
+    if end_date is not None:
+        clauses.append("calendar_day <= :end_date")
+        params["end_date"] = end_date
+    if country and country != "All":
+        clauses.append("country = :country")
+        params["country"] = country
+
+    where_sql = " AND ".join(clauses)
+    query = text(
+        f"""
+        SELECT
+            COALESCE(SUM(gross_sales), 0) AS gross_sales,
+            COALESCE(SUM(valid_sales_revenue), 0) AS valid_sales,
+            COALESCE(SUM(return_value), 0) AS return_value,
+            COALESCE(SUM(net_sales), 0) AS net_sales,
+            COALESCE(SUM(distinct_invoices), 0) AS invoice_segments,
+            COALESCE(SUM(units_sold), 0) AS units_sold,
+            COALESCE(SUM(units_returned), 0) AS units_returned
+        FROM mart_daily_sales
+        WHERE {where_sql}
+        """
+    )
+
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(query, params).mappings().first()
+            if not row:
+                return {
+                    "gross_sales": 0.0,
+                    "valid_sales": 0.0,
+                    "return_value": 0.0,
+                    "net_sales": 0.0,
+                    "invoice_segments": 0,
+                    "units_sold": 0,
+                    "units_returned": 0,
+                    "net_aov": 0.0,
+                    "gross_aov": 0.0,
+                    "return_rate_pct": 0.0,
+                }
+            gross = float(row["gross_sales"])
+            ret = float(row["return_value"])
+            net = float(row["net_sales"])
+            segments = int(row["invoice_segments"])
+            units_s = int(row["units_sold"])
+            units_r = int(row["units_returned"])
+
+            net_aov = round(net / segments, 2) if segments > 0 else 0.0
+            gross_aov = round(gross / segments, 2) if segments > 0 else 0.0
+            return_rate = round(abs(ret) / gross * 100.0, 2) if gross > 0 else 0.0
+
+            return {
+                "gross_sales": gross,
+                "valid_sales": float(row["valid_sales"]),
+                "return_value": ret,
+                "net_sales": net,
+                "invoice_segments": segments,
+                "units_sold": units_s,
+                "units_returned": units_r,
+                "net_aov": net_aov,
+                "gross_aov": gross_aov,
+                "return_rate_pct": return_rate,
+            }
+    except SQLAlchemyError as exc:
+        raise DatabaseQueryError(f"Failed to fetch sales KPIs: {exc}") from exc
+
+
+def get_daily_sales_trend(
+    engine: Engine,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    country: str | None = None,
+) -> pd.DataFrame:
+    """Retrieve daily sales timeseries aggregated across categories."""
+    clauses = ["1=1"]
+    params: dict[str, Any] = {}
+
+    if start_date is not None:
+        clauses.append("calendar_day >= :start_date")
+        params["start_date"] = start_date
+    if end_date is not None:
+        clauses.append("calendar_day <= :end_date")
+        params["end_date"] = end_date
+    if country and country != "All":
+        clauses.append("country = :country")
+        params["country"] = country
+
+    where_sql = " AND ".join(clauses)
+    query = text(
+        f"""
+        SELECT
+            calendar_day,
+            SUM(gross_sales) AS gross_sales,
+            SUM(return_value) AS return_value,
+            SUM(net_sales) AS net_sales,
+            SUM(distinct_invoices) AS invoice_segments,
+            SUM(units_sold) AS units_sold,
+            SUM(units_returned) AS units_returned
+        FROM mart_daily_sales
+        WHERE {where_sql}
+        GROUP BY calendar_day
+        ORDER BY calendar_day ASC
+        """
+    )
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(query, params)
+            df = pd.DataFrame(result.fetchall(), columns=result.keys())
+            if not df.empty:
+                df["calendar_day"] = pd.to_datetime(df["calendar_day"])
+            return df
+    except SQLAlchemyError as exc:
+        raise DatabaseQueryError(f"Failed to fetch daily sales trend: {exc}") from exc
+
+
+def get_sales_by_country(
+    engine: Engine,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    country: str | None = None,
+    limit: int = 10,
+) -> pd.DataFrame:
+    """Retrieve top revenue countries within the selected date range."""
+    clauses = ["1=1"]
+    params: dict[str, Any] = {"limit": limit}
+
+    if start_date is not None:
+        clauses.append("calendar_day >= :start_date")
+        params["start_date"] = start_date
+    if end_date is not None:
+        clauses.append("calendar_day <= :end_date")
+        params["end_date"] = end_date
+    if country and country != "All":
+        clauses.append("country = :country")
+        params["country"] = country
+
+    where_sql = " AND ".join(clauses)
+    query = text(
+        f"""
+        SELECT
+            country,
+            SUM(gross_sales) AS gross_sales,
+            SUM(return_value) AS return_value,
+            SUM(net_sales) AS net_sales,
+            SUM(distinct_invoices) AS invoice_segments
+        FROM mart_daily_sales
+        WHERE {where_sql}
+        GROUP BY country
+        ORDER BY net_sales DESC
+        LIMIT :limit
+        """
+    )
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(query, params)
+            return pd.DataFrame(result.fetchall(), columns=result.keys())
+    except SQLAlchemyError as exc:
+        raise DatabaseQueryError(f"Failed to fetch country sales: {exc}") from exc
+
+
+def get_merchandise_breakdown(
+    engine: Engine,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    country: str | None = None,
+) -> pd.DataFrame:
+    """Retrieve breakdown between physical merchandise and special/service fees."""
+    clauses = ["1=1"]
+    params: dict[str, Any] = {}
+
+    if start_date is not None:
+        clauses.append("calendar_day >= :start_date")
+        params["start_date"] = start_date
+    if end_date is not None:
+        clauses.append("calendar_day <= :end_date")
+        params["end_date"] = end_date
+    if country and country != "All":
+        clauses.append("country = :country")
+        params["country"] = country
+
+    where_sql = " AND ".join(clauses)
+    query = text(
+        f"""
+        SELECT
+            CASE
+                WHEN is_physical_merchandise THEN 'Physical Merchandise'
+                ELSE 'Special & Service'
+            END AS product_classification,
+            SUM(gross_sales) AS gross_sales,
+            SUM(return_value) AS return_value,
+            SUM(net_sales) AS net_sales,
+            SUM(units_sold) AS units_sold
+        FROM mart_daily_sales
+        WHERE {where_sql}
+        GROUP BY is_physical_merchandise
+        ORDER BY is_physical_merchandise DESC
+        """
+    )
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(query, params)
+            return pd.DataFrame(result.fetchall(), columns=result.keys())
+    except SQLAlchemyError as exc:
+        raise DatabaseQueryError(f"Failed to fetch merchandise breakdown: {exc}") from exc
+
+
+# ============================================================================
+# CUSTOMER ANALYTICS QUERIES (mart_customer_daily, mart_customer_snapshot)
+# ============================================================================
+
+def get_customer_kpis(
+    engine: Engine,
+    country: str | None = None,
+) -> dict[str, float]:
+    """Calculate aggregate customer statistics from mart_customer_snapshot."""
+    clauses = ["1=1"]
+    params: dict[str, Any] = {}
+
+    if country and country != "All":
+        clauses.append("primary_country = :country")
+        params["country"] = country
+
+    where_sql = " AND ".join(clauses)
+    query = text(
+        f"""
+        SELECT
+            COUNT(*) AS total_customers,
+            COUNT(CASE WHEN frequency >= 2 THEN 1 END) AS repeat_customers,
+            COUNT(CASE WHEN frequency = 1 THEN 1 END) AS one_time_buyers,
+            COALESCE(SUM(monetary), 0) AS total_customer_spend,
+            COALESCE(AVG(frequency), 0) AS avg_frequency,
+            COALESCE(AVG(average_order_value), 0) AS avg_aov,
+            COALESCE(AVG(recency_days), 0) AS avg_recency_days,
+            COALESCE(AVG(tenure_days), 0) AS avg_tenure_days
+        FROM mart_customer_snapshot
+        WHERE {where_sql}
+        """
+    )
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(query, params).mappings().first()
+            if not row:
+                return {
+                    "total_customers": 0,
+                    "repeat_customers": 0,
+                    "repeat_rate_pct": 0.0,
+                    "one_time_buyers": 0,
+                    "total_customer_spend": 0.0,
+                    "avg_frequency": 0.0,
+                    "avg_aov": 0.0,
+                    "avg_recency_days": 0.0,
+                    "avg_tenure_days": 0.0,
+                }
+            total_cust = int(row["total_customers"])
+            rep_cust = int(row["repeat_customers"])
+            rep_rate = round(rep_cust / total_cust * 100.0, 2) if total_cust > 0 else 0.0
+
+            return {
+                "total_customers": total_cust,
+                "repeat_customers": rep_cust,
+                "repeat_rate_pct": rep_rate,
+                "one_time_buyers": int(row["one_time_buyers"]),
+                "total_customer_spend": float(row["total_customer_spend"]),
+                "avg_frequency": float(row["avg_frequency"]),
+                "avg_aov": float(row["avg_aov"]),
+                "avg_recency_days": float(row["avg_recency_days"]),
+                "avg_tenure_days": float(row["avg_tenure_days"]),
+            }
+    except SQLAlchemyError as exc:
+        raise DatabaseQueryError(f"Failed to fetch customer KPIs: {exc}") from exc
+
+
+def get_customer_daily_trend(
+    engine: Engine,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> pd.DataFrame:
+    """Retrieve daily active purchasing customers and aggregate daily spend."""
+    clauses = ["1=1"]
+    params: dict[str, Any] = {}
+
+    if start_date is not None:
+        clauses.append("calendar_day >= :start_date")
+        params["start_date"] = start_date
+    if end_date is not None:
+        clauses.append("calendar_day <= :end_date")
+        params["end_date"] = end_date
+
+    where_sql = " AND ".join(clauses)
+    query = text(
+        f"""
+        SELECT
+            calendar_day,
+            COUNT(DISTINCT customer_id) AS active_customers,
+            SUM(gross_spend) AS daily_gross_spend,
+            SUM(net_spend) AS daily_net_spend,
+            SUM(order_frequency) AS daily_orders
+        FROM mart_customer_daily
+        WHERE {where_sql}
+        GROUP BY calendar_day
+        ORDER BY calendar_day ASC
+        """
+    )
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(query, params)
+            df = pd.DataFrame(result.fetchall(), columns=result.keys())
+            if not df.empty:
+                df["calendar_day"] = pd.to_datetime(df["calendar_day"])
+            return df
+    except SQLAlchemyError as exc:
+        raise DatabaseQueryError(f"Failed to fetch customer daily trend: {exc}") from exc
+
+
+def get_top_customers(
+    engine: Engine,
+    country: str | None = None,
+    limit: int = 15,
+) -> pd.DataFrame:
+    """Retrieve top customers ranked by total monetary spend."""
+    clauses = ["1=1"]
+    params: dict[str, Any] = {"limit": limit}
+
+    if country and country != "All":
+        clauses.append("primary_country = :country")
+        params["country"] = country
+
+    where_sql = " AND ".join(clauses)
+    query = text(
+        f"""
+        SELECT
+            customer_id,
+            primary_country,
+            monetary,
+            frequency,
+            average_order_value,
+            recency_days,
+            tenure_days,
+            first_purchase_date,
+            last_purchase_date
+        FROM mart_customer_snapshot
+        WHERE {where_sql}
+        ORDER BY monetary DESC
+        LIMIT :limit
+        """
+    )
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(query, params)
+            return pd.DataFrame(result.fetchall(), columns=result.keys())
+    except SQLAlchemyError as exc:
+        raise DatabaseQueryError(f"Failed to fetch top customers: {exc}") from exc
+
+
+# ============================================================================
+# RFM ANALYTICS & SEGMENTATION (mart_customer_snapshot)
+# ============================================================================
+
+def get_rfm_snapshot(
+    engine: Engine,
+    country: str | None = None,
+) -> pd.DataFrame:
+    """Retrieve full customer snapshot dataset for RFM analysis and distribution."""
+    clauses = ["1=1"]
+    params: dict[str, Any] = {}
+
+    if country and country != "All":
+        clauses.append("primary_country = :country")
+        params["country"] = country
+
+    where_sql = " AND ".join(clauses)
+    query = text(
+        f"""
+        SELECT
+            customer_id,
+            primary_country,
+            recency_days,
+            frequency,
+            monetary,
+            average_order_value,
+            tenure_days
+        FROM mart_customer_snapshot
+        WHERE {where_sql}
+        """
+    )
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(query, params)
+            return pd.DataFrame(result.fetchall(), columns=result.keys())
+    except SQLAlchemyError as exc:
+        raise DatabaseQueryError(f"Failed to fetch RFM snapshot: {exc}") from exc
+
+
+def compute_rfm_segments(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute standard 1-5 RFM scores and business customer segments.
+
+    - Recency score: 5 = most recent (lowest recency_days), 1 = least recent.
+    - Frequency score: 5 = most frequent, 1 = least frequent.
+    - Monetary score: 5 = highest spend, 1 = lowest spend.
+
+    Handles duplicated quantiles cleanly using rank percentile bins.
+    """
+    if df.empty:
+        result = df.copy()
+        result["r_score"] = 0
+        result["f_score"] = 0
+        result["m_score"] = 0
+        result["rfm_score"] = "000"
+        result["rfm_segment"] = "Unknown"
+        return result
+
+    result = df.copy()
+
+    # Recency: lower days is better -> invert rank (NaN/null means no valid sale -> worst recency)
+    clean_recency = result["recency_days"].fillna(result["recency_days"].max() + 365)
+    r_pct = clean_recency.rank(pct=True, method="first", ascending=False)
+    result["r_score"] = np.ceil(r_pct * 5).fillna(1).astype(int).clip(1, 5)
+
+    # Frequency: higher is better (NaN -> 0 -> lowest frequency)
+    clean_freq = result["frequency"].fillna(0)
+    f_pct = clean_freq.rank(pct=True, method="first", ascending=True)
+    result["f_score"] = np.ceil(f_pct * 5).fillna(1).astype(int).clip(1, 5)
+
+    # Monetary: higher is better (NaN -> 0 -> lowest spend)
+    clean_monetary = result["monetary"].fillna(0)
+    m_pct = clean_monetary.rank(pct=True, method="first", ascending=True)
+    result["m_score"] = np.ceil(m_pct * 5).fillna(1).astype(int).clip(1, 5)
+
+    result["rfm_score"] = (
+        result["r_score"].astype(str)
+        + result["f_score"].astype(str)
+        + result["m_score"].astype(str)
+    )
+
+    def assign_segment(row: pd.Series) -> str:
+        r = row["r_score"]
+        f = row["f_score"]
+        m = row["m_score"]
+
+        # High-value active buyers
+        if r >= 4 and f >= 4 and m >= 4:
+            return "Champions"
+        if r >= 3 and f >= 3:
+            return "Loyal Customers"
+        if r >= 4 and f <= 2:
+            return "Potential Loyalists"
+        if r >= 3 and f <= 2 and m >= 3:
+            return "Promising"
+        # Slipping / at risk
+        if r <= 2 and f >= 3 and m >= 3:
+            return "At Risk"
+        if r <= 2 and f >= 3 and m <= 2:
+            return "Need Attention"
+        if r <= 2 and f <= 2 and m >= 3:
+            return "About To Sleep"
+        # Inactive
+        if r == 1 and f <= 2:
+            return "Lost"
+        if r <= 2 and f <= 2:
+            return "Hibernating"
+        return "Standard"
+
+    result["rfm_segment"] = result.apply(assign_segment, axis=1)
+    return result
+
+
+def resample_sales_trend(df: pd.DataFrame, frequency: str = "Daily") -> pd.DataFrame:
+    """Resample daily sales timeseries into Daily, Weekly, or Monthly buckets.
+
+    Supported frequency: 'Daily', 'Weekly', 'Monthly'.
+    Preserves all sales and volume aggregates.
+    """
+    if df.empty or frequency == "Daily":
+        return df
+    resampled = df.copy()
+    if not pd.api.types.is_datetime64_any_dtype(resampled["calendar_day"]):
+        resampled["calendar_day"] = pd.to_datetime(resampled["calendar_day"])
+
+    rule = "W-MON" if frequency == "Weekly" else "MS"
+    aggregated = (
+        resampled.set_index("calendar_day")
+        .resample(rule)
+        .agg({
+            "gross_sales": "sum",
+            "return_value": "sum",
+            "net_sales": "sum",
+            "invoice_segments": "sum",
+            "units_sold": "sum",
+            "units_returned": "sum",
+        })
+        .reset_index()
+    )
+    return aggregated
+
+
+def calculate_country_shares(df: pd.DataFrame, total_net_sales: float | None = None) -> pd.DataFrame:
+    """Calculate market share percentages for top revenue countries.
+    
+    If total_net_sales is not provided or <= 0, market share is reported as 0.0 to avoid misrepresentation.
+    Denominator must be the total market sales scope, NOT just the top 10 countries, unless explicitly asked.
+    """
+    if df.empty:
+        result = df.copy()
+        result["market_share_pct"] = 0.0
+        return result
+
+    result = df.copy()
+    
+    # Strictly use the explicitly provided total denominator.
+    # Fallback to df sum only if explicitly needed, but it misrepresents market share if df is truncated.
+    denom = total_net_sales if total_net_sales is not None else result["net_sales"].sum()
+    
+    if denom > 0:
+        result["market_share_pct"] = (result["net_sales"] / denom * 100.0).round(2)
+    else:
+        result["market_share_pct"] = 0.0
+    return result
+
+
+def compute_customer_distributions(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Calculate frequency tier breakdown and monetary spending brackets from snapshot DataFrame.
+
+    Returns:
+    - freq_distribution: DataFrame with columns ['Tier', 'Customer Count', 'Percentage']
+    - mon_distribution: DataFrame with columns ['Bracket', 'Customer Count', 'Percentage']
+    """
+    if df.empty:
+        empty_freq = pd.DataFrame(columns=["Tier", "Customer Count", "Percentage"])
+        empty_mon = pd.DataFrame(columns=["Bracket", "Customer Count", "Percentage"])
+        return empty_freq, empty_mon
+
+    total = len(df)
+
+    # 1. Frequency Tiers
+    freq_bins = [-1, 0, 1, 4, 9, 1000000]
+    freq_labels = [
+        "0 Orders (Registered/No Purchase)",
+        "1 Order (One-Time)",
+        "2-4 Orders (Occasional)",
+        "5-9 Orders (Frequent)",
+        "10+ Orders (VIP Power Buyers)",
+    ]
+    freq_series = pd.cut(df["frequency"].fillna(0), bins=freq_bins, labels=freq_labels)
+    freq_df = freq_series.value_counts(sort=False).reset_index()
+    freq_df.columns = ["Tier", "Customer Count"]
+    freq_df["Percentage"] = (freq_df["Customer Count"] / total * 100.0).round(2)
+
+    # 2. Monetary Brackets
+    mon_bins = [-1e12, 0, 500, 2000, 5000, 20000, 1e12]
+    mon_labels = [
+        "<= £0 (Net Negative)",
+        "< £500 (Low Spend)",
+        "£500 - £2,000 (Medium)",
+        "£2,000 - £5,000 (High)",
+        "£5,000 - £20,000 (Premium)",
+        "£20,000+ (Enterprise VIP)",
+    ]
+    mon_series = pd.cut(df["monetary"].fillna(0), bins=mon_bins, labels=mon_labels)
+    mon_df = mon_series.value_counts(sort=False).reset_index()
+    mon_df.columns = ["Bracket", "Customer Count"]
+    mon_df["Percentage"] = (mon_df["Customer Count"] / total * 100.0).round(2)
+
+    return freq_df, mon_df
+
+
+def summarize_rfm_segments(df: pd.DataFrame) -> pd.DataFrame:
+    """Produce comprehensive segment-level profile and revenue contribution matrix.
+
+    Returns DataFrame sorted by Total Revenue descending.
+    """
+    if df.empty or "rfm_segment" not in df.columns:
+        return pd.DataFrame(
+            columns=[
+                "Segment",
+                "Customer Count",
+                "Customer Share (%)",
+                "Total Revenue (£)",
+                "Revenue Share (%)",
+                "Avg Spend (£)",
+                "Avg Recency (Days)",
+                "Avg Frequency",
+            ]
+        )
+
+    total_customers = len(df)
+    total_revenue = float(df["monetary"].sum())
+
+    summary = (
+        df.groupby("rfm_segment", as_index=False)
+        .agg(
+            customer_count=("customer_id", "count"),
+            total_revenue=("monetary", "sum"),
+            avg_spend=("monetary", "mean"),
+            avg_recency=("recency_days", "mean"),
+            avg_frequency=("frequency", "mean"),
+        )
+        .rename(columns={"rfm_segment": "Segment"})
+    )
+
+    summary["Customer Share (%)"] = (summary["customer_count"] / total_customers * 100.0).round(2)
+    summary["Revenue Share (%)"] = (
+        (summary["total_revenue"] / total_revenue * 100.0).round(2)
+        if total_revenue > 0
+        else 0.0
+    )
+    summary["Total Revenue (£)"] = summary["total_revenue"].round(2)
+    summary["Avg Spend (£)"] = summary["avg_spend"].round(2)
+    summary["Avg Recency (Days)"] = summary["avg_recency"].round(1)
+    summary["Avg Frequency"] = summary["avg_frequency"].round(1)
+
+    summary = summary.drop(columns=["total_revenue", "avg_spend", "avg_recency", "avg_frequency"])
+    summary = summary.rename(columns={"customer_count": "Customer Count"})
+    summary = summary.sort_values(by="Total Revenue (£)", ascending=False).reset_index(drop=True)
+
+    # Reorder columns logically
+    cols = [
+        "Segment",
+        "Customer Count",
+        "Customer Share (%)",
+        "Total Revenue (£)",
+        "Revenue Share (%)",
+        "Avg Spend (£)",
+        "Avg Recency (Days)",
+        "Avg Frequency",
+    ]
+    return summary[cols]
+
+
+
