@@ -16,6 +16,7 @@ import streamlit as st
 
 from app.queries import (
     DatabaseQueryError,
+    calculate_country_shares,
     compute_rfm_segments,
     get_available_countries,
     get_customer_daily_trend,
@@ -28,6 +29,7 @@ from app.queries import (
     get_sales_by_country,
     get_sales_kpis,
     get_top_customers,
+    resample_sales_trend,
 )
 
 # ============================================================================
@@ -217,45 +219,162 @@ def main():
     ])
 
     # ========================================================================
-    # TAB 1: SALES OVERVIEW (Skeleton preview for Checkpoint A)
+    # TAB 1: SALES OVERVIEW (Checkpoint B Implementation)
     # ========================================================================
     with tab_sales:
         try:
             kpis, trend_df, country_df, merch_df = fetch_sales_data(
                 engine, start_date=start_date, end_date=end_date, country=country_choice
             )
-            # KPI Metric Row
+
+            # 1. Executive KPI Cards Row
+            st.markdown("### 📊 Key Performance Indicators (Sales)")
             col1, col2, col3, col4, col5 = st.columns(5)
             with col1:
-                st.metric("Gross Sales", f"£{kpis['gross_sales']:,.2f}")
+                st.metric(
+                    label="Gross Sales",
+                    value=f"£{kpis['gross_sales']:,.2f}",
+                    help="Total revenue from all valid positive sales transactions.",
+                )
+                st.caption(f"Valid: £{kpis['valid_sales']:,.2f}")
             with col2:
-                st.metric("Returns / Cancel", f"£{abs(kpis['return_value']):,.2f}", delta=f"-{kpis['return_rate_pct']:.2f}%", delta_color="inverse")
+                st.metric(
+                    label="Returns & Refunds",
+                    value=f"-£{abs(kpis['return_value']):,.2f}",
+                    delta=f"{kpis['return_rate_pct']:.2f}% return rate",
+                    delta_color="inverse",
+                    help="Total value lost to cancellations and returns.",
+                )
+                st.caption(f"Units returned: {kpis['units_returned']:,}")
             with col3:
-                st.metric("Net Sales", f"£{kpis['net_sales']:,.2f}")
+                st.metric(
+                    label="Net Sales",
+                    value=f"£{kpis['net_sales']:,.2f}",
+                    help="Net revenue realized = Gross Sales - Returns.",
+                )
+                net_rate = (kpis['net_sales'] / kpis['gross_sales'] * 100.0) if kpis['gross_sales'] > 0 else 0.0
+                st.caption(f"Net realization: {net_rate:.1f}%")
             with col4:
-                st.metric("Total Orders", f"{kpis['total_orders']:,}")
+                st.metric(
+                    label="Total Orders",
+                    value=f"{kpis['total_orders']:,}",
+                    help="Count of unique valid sales invoices.",
+                )
+                st.caption(f"Units sold: {kpis['units_sold']:,}")
             with col5:
-                st.metric("Average Order Value", f"£{kpis['aov']:,.2f}")
+                st.metric(
+                    label="Average Order Value",
+                    value=f"£{kpis['aov']:,.2f}",
+                    help="Average net revenue per order invoice.",
+                )
+                items_per_order = (kpis['units_sold'] / kpis['total_orders']) if kpis['total_orders'] > 0 else 0.0
+                st.caption(f"Avg items/order: {items_per_order:.1f}")
 
             st.divider()
 
-            # Sales charts row
-            col_chart_main, col_chart_side = st.columns([2, 1])
-            with col_chart_main:
-                st.subheader("Daily Net Sales Trend")
-                if not trend_df.empty:
-                    chart_data = trend_df.set_index("calendar_day")[["net_sales", "gross_sales"]]
-                    st.line_chart(chart_data)
-                else:
-                    st.info("No sales transactions found for the selected filter.")
+            # 2. Sales Trend & Volume Over Time
+            st.markdown("### 📈 Revenue & Order Volume Trends")
+            col_freq, col_metric = st.columns([1, 2])
+            with col_freq:
+                freq_choice = st.radio(
+                    "Trend Granularity",
+                    options=["Daily", "Weekly", "Monthly"],
+                    horizontal=True,
+                    index=1,
+                    help="Aggregate sales curve into Daily, Weekly, or Monthly buckets.",
+                )
+            with col_metric:
+                view_metric = st.selectbox(
+                    "Trend Focus",
+                    options=["Net & Gross Sales", "Units Sold & Returned", "Cumulative Net Sales"],
+                    index=0,
+                )
 
-            with col_chart_side:
-                st.subheader("Top Markets by Net Sales")
-                if not country_df.empty:
-                    top_bar_data = country_df.set_index("country")["net_sales"].head(7)
-                    st.bar_chart(top_bar_data)
+            if not trend_df.empty:
+                resampled_trend = resample_sales_trend(trend_df, frequency=freq_choice)
+                if view_metric == "Net & Gross Sales":
+                    chart_data = resampled_trend.set_index("calendar_day")[["net_sales", "gross_sales"]]
+                    st.line_chart(chart_data, color=["#1E88E5", "#43A047"])
+                elif view_metric == "Units Sold & Returned":
+                    unit_chart = resampled_trend.set_index("calendar_day")[["units_sold", "units_returned"]]
+                    st.bar_chart(unit_chart, color=["#1E88E5", "#E53935"])
+                else:
+                    cumulative = resampled_trend.copy()
+                    cumulative["cumulative_net_sales"] = cumulative["net_sales"].cumsum()
+                    st.area_chart(
+                        cumulative.set_index("calendar_day")["cumulative_net_sales"],
+                        color="#1E88E5",
+                    )
+            else:
+                st.info("No sales transactions found for the selected time window and country.")
+
+            st.divider()
+
+            # 3. Geographic Performance & Market Share
+            st.markdown("### 🌍 Geographic Performance & Market Distribution")
+            col_geo_chart, col_geo_table = st.columns([1, 1])
+
+            country_with_shares = calculate_country_shares(country_df, total_net_sales=kpis["net_sales"])
+
+            with col_geo_chart:
+                st.subheader("Top 10 Markets by Net Revenue")
+                if not country_with_shares.empty:
+                    bar_data = country_with_shares.head(10).set_index("country")["net_sales"]
+                    st.bar_chart(bar_data, color="#1E88E5")
                 else:
                     st.info("No country sales data available.")
+
+            with col_geo_table:
+                st.subheader("Market Revenue Breakdown")
+                if not country_with_shares.empty:
+                    display_geo = country_with_shares.copy()
+                    display_geo.columns = [
+                        "Country", "Gross Sales (£)", "Returns (£)", "Net Sales (£)", "Orders", "Market Share (%)"
+                    ]
+                    st.dataframe(
+                        display_geo.style.format({
+                            "Gross Sales (£)": "£{:,.2f}",
+                            "Returns (£)": "£{:,.2f}",
+                            "Net Sales (£)": "£{:,.2f}",
+                            "Orders": "{:,.0f}",
+                            "Market Share (%)": "{:.2f}%",
+                        }),
+                        use_container_width=True,
+                        height=350,
+                    )
+                else:
+                    st.info("No country records to display.")
+
+            st.divider()
+
+            # 4. Product Classification & Data Governance
+            st.markdown("### 🏷️ Product Classification & Governance Contract")
+            col_merch_info, col_merch_table = st.columns([1, 1])
+
+            with col_merch_info:
+                st.info(
+                    "**Data Governance & Mart Contract:**\n\n"
+                    "- All sales lines in `mart_daily_sales` represent verified **Physical Merchandise**.\n"
+                    "- Non-merchandise activities (Postal fees `POST`, Manual adjustments `M`, Bank charges `BANK CHARGES`, Bad Debt) "
+                    "are partitioned per Stage 1 & Stage 2 data cleansing contracts.\n"
+                    "- Inventory adjustments (`ADJUST`, `ADJUST2`) are excluded from sales revenue calculations."
+                )
+
+            with col_merch_table:
+                if not merch_df.empty:
+                    display_merch = merch_df.copy()
+                    display_merch.columns = [
+                        "Classification", "Gross Sales (£)", "Returns (£)", "Net Sales (£)", "Units Sold"
+                    ]
+                    st.dataframe(
+                        display_merch.style.format({
+                            "Gross Sales (£)": "£{:,.2f}",
+                            "Returns (£)": "£{:,.2f}",
+                            "Net Sales (£)": "£{:,.2f}",
+                            "Units Sold": "{:,.0f}",
+                        }),
+                        use_container_width=True,
+                    )
 
         except DatabaseQueryError as err:
             st.error(f"Query error in Sales Overview: {err}")

@@ -306,7 +306,7 @@ Chạy toàn bộ test suite:
 pytest tests/test_dashboard.py -v
 ```
 
-Kết quả:
+Kết quả sau Checkpoint B:
 ```
 tests/test_dashboard.py::test_normalize_db_url_encodes_special_password PASSED
 tests/test_dashboard.py::test_normalize_db_url_leaves_standard_url_untouched PASSED
@@ -318,6 +318,9 @@ tests/test_dashboard.py::test_get_sales_kpis_filtered_by_country_and_date PASSED
 tests/test_dashboard.py::test_get_daily_sales_trend PASSED
 tests/test_dashboard.py::test_get_sales_by_country PASSED
 tests/test_dashboard.py::test_get_merchandise_breakdown PASSED
+tests/test_dashboard.py::test_resample_sales_trend_weekly_and_monthly PASSED
+tests/test_dashboard.py::test_calculate_country_shares PASSED
+tests/test_dashboard.py::test_resample_sales_trend_empty PASSED
 tests/test_dashboard.py::test_get_customer_kpis PASSED
 tests/test_dashboard.py::test_get_customer_daily_trend PASSED
 tests/test_dashboard.py::test_get_top_customers PASSED
@@ -325,15 +328,19 @@ tests/test_dashboard.py::test_compute_rfm_segments_empty_dataframe PASSED
 tests/test_dashboard.py::test_compute_rfm_segments_handles_null_recency_and_assigns_segments PASSED
 tests/test_dashboard.py::test_missing_table_raises_database_query_error PASSED
 
-============================= 16 passed in 0.78s ==============================
+============================= 19 passed in 1.50s ==============================
 ```
 
 ---
 
 ## 15. Lịch Sử Git Commits Theo Checkpoint
 
-- **Checkpoint A:** Khởi tạo kiến trúc Dashboard & Query Layer, cấu hình Streamlit dependency, xử lý kết nối DB an toàn và xây dựng bộ kiểm thử in-memory.
-- **Checkpoint B:** (Đang triển khai) Hoàn thiện Sales Overview Section với phân tích sản phẩm và xu hướng sâu.
+- **Checkpoint A (`3337dfc`):** Khởi tạo kiến trúc Dashboard & Query Layer, cấu hình Streamlit dependency, xử lý kết nối DB an toàn và xây dựng bộ kiểm thử in-memory.
+- **Checkpoint B:** Hoàn thiện Sales Overview Section:
+  - 5 KPI metric cards với chỉ số hoàn hàng và realization rate.
+  - Bộ điều khiển độ phân giải thời gian (Daily, Weekly, Monthly) với line chart, bar chart và cumulative revenue area chart.
+  - Phân tích thị trường quốc tế với tỉ trọng thị phần (Market Share %) và bảng chi tiết doanh thu theo quốc gia.
+  - Thẻ thông tin kiểm soát dữ liệu và phân loại hàng hóa vật lý (Physical Merchandise).
 - **Checkpoint C:** (Kế tiếp) Hoàn thiện Customer Analytics Section.
 - **Checkpoint D:** (Kế tiếp) Hoàn thiện RFM Analytics Section.
 - **Checkpoint E:** (Kế tiếp) Hoàn thiện toàn diện, kiểm tra an ninh và kiểm thử hồi quy.

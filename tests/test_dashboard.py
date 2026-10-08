@@ -17,6 +17,7 @@ from sqlalchemy import create_engine, text
 
 from app.queries import (
     DatabaseQueryError,
+    calculate_country_shares,
     compute_rfm_segments,
     get_available_countries,
     get_customer_daily_trend,
@@ -31,6 +32,7 @@ from app.queries import (
     get_top_customers,
     load_env_config,
     normalize_db_url,
+    resample_sales_trend,
 )
 
 
@@ -220,6 +222,36 @@ def test_get_merchandise_breakdown(sqlite_engine):
     labels = breakdown_df["product_classification"].tolist()
     assert "Physical Merchandise" in labels
     assert "Special & Service" in labels
+
+
+def test_resample_sales_trend_weekly_and_monthly(sqlite_engine):
+    daily = get_daily_sales_trend(sqlite_engine)
+    assert len(daily) == 3
+    daily_net_sum = daily["net_sales"].sum()
+
+    weekly = resample_sales_trend(daily, frequency="Weekly")
+    assert not weekly.empty
+    assert round(weekly["net_sales"].sum(), 2) == round(daily_net_sum, 2)
+
+    monthly = resample_sales_trend(daily, frequency="Monthly")
+    assert len(monthly) == 1  # all 3 days are in Jan 2010
+    assert round(monthly["net_sales"].sum(), 2) == round(daily_net_sum, 2)
+    assert monthly.iloc[0]["total_orders"] == daily["total_orders"].sum()
+
+
+def test_calculate_country_shares(sqlite_engine):
+    country_df = get_sales_by_country(sqlite_engine, limit=10)
+    shares_df = calculate_country_shares(country_df, total_net_sales=1600.0)
+    assert "market_share_pct" in shares_df.columns
+    # Total net sales across all 3 countries is 1600.0 (UK: 950 -> ~59.38%)
+    uk_share = shares_df.loc[shares_df["country"] == "United Kingdom", "market_share_pct"].iloc[0]
+    assert uk_share == pytest.approx(59.38, abs=0.1)
+
+
+def test_resample_sales_trend_empty():
+    empty_df = pd.DataFrame()
+    assert resample_sales_trend(empty_df, "Weekly").empty
+    assert calculate_country_shares(empty_df).empty
 
 
 # ============================================================================

@@ -586,3 +586,49 @@ def compute_rfm_segments(df: pd.DataFrame) -> pd.DataFrame:
 
     result["rfm_segment"] = result.apply(assign_segment, axis=1)
     return result
+
+
+def resample_sales_trend(df: pd.DataFrame, frequency: str = "Daily") -> pd.DataFrame:
+    """Resample daily sales timeseries into Daily, Weekly, or Monthly buckets.
+
+    Supported frequency: 'Daily', 'Weekly', 'Monthly'.
+    Preserves all sales and volume aggregates.
+    """
+    if df.empty or frequency == "Daily":
+        return df
+    resampled = df.copy()
+    if not pd.api.types.is_datetime64_any_dtype(resampled["calendar_day"]):
+        resampled["calendar_day"] = pd.to_datetime(resampled["calendar_day"])
+
+    rule = "W-MON" if frequency == "Weekly" else "MS"
+    aggregated = (
+        resampled.set_index("calendar_day")
+        .resample(rule)
+        .agg({
+            "gross_sales": "sum",
+            "return_value": "sum",
+            "net_sales": "sum",
+            "total_orders": "sum",
+            "units_sold": "sum",
+            "units_returned": "sum",
+        })
+        .reset_index()
+    )
+    return aggregated
+
+
+def calculate_country_shares(df: pd.DataFrame, total_net_sales: float | None = None) -> pd.DataFrame:
+    """Calculate market share percentages for top revenue countries."""
+    if df.empty:
+        result = df.copy()
+        result["market_share_pct"] = 0.0
+        return result
+
+    result = df.copy()
+    denom = total_net_sales if total_net_sales and total_net_sales > 0 else result["net_sales"].sum()
+    if denom > 0:
+        result["market_share_pct"] = (result["net_sales"] / denom * 100.0).round(2)
+    else:
+        result["market_share_pct"] = 0.0
+    return result
+
