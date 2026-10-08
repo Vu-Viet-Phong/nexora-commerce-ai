@@ -10,6 +10,7 @@ from .contracts import (
     MONEY_COLUMNS, NULLABLE, TABLE_COLUMNS, MARTS, core_checks, parameters, qualified,
 )
 from .results import QualityReport, ValidationResult, compare, skipped
+from .metadata import validate_metadata
 
 
 def schema_results(rows: list[dict]) -> list[ValidationResult]:
@@ -85,6 +86,7 @@ def validate_database(
                     **{**catalog[0].__dict__, "execution_ms": (perf_counter() - tick) * 1000}
                 )
                 report.results.extend(catalog)
+                report.results.extend(validate_metadata(connection, schema))
                 if catalog[0].status == "FAIL":
                     report.results.extend(skipped(check.name, "Required core columns are missing.")
                                           for check in checks)

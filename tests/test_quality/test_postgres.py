@@ -30,6 +30,9 @@ def test_correct_fixture_all_core_and_source_checks_pass(quality_sandbox):
     report, checks = results(quality_sandbox)
     assert report.summary["FAIL"] == 0, report.to_json()
     assert checks["source.records"].status == "PASS"
+    assert all(checks[name].status == "PASS" for name in (
+        "schema.primary_keys", "schema.foreign_keys", "schema.unique_constraints", "schema.indexes"
+    ))
     assert checks["source.monetary_aggregates"].actual["ledger"] == Decimal("8.00")
     assert checks["profile.allowed_missing_and_special_lines"].actual["guest_lines"] == 2
     assert checks["profile.allowed_missing_and_special_lines"].actual["retained_duplicate_lines"] == 2
@@ -221,3 +224,32 @@ def test_raw_price_flags_survive_rounding_and_negative_zero(quality_sandbox, tmp
     assert checks["business.price_flags"].status == "PASS"
     assert checks["source.records"].status == "PASS", report.to_json()
     assert report.gate_summary["status"] == "PASS", report.to_json()
+
+
+@pytest.mark.parametrize("kind,expected", [
+    ("p", "schema.primary_keys"), ("u", "schema.unique_constraints"), ("f", "schema.foreign_keys"),
+])
+def test_missing_enforcement_detected_without_dirty_data(quality_sandbox, kind, expected):
+    drop_constraints(quality_sandbox, kind)
+    report, checks = results(quality_sandbox)
+    assert checks[expected].status == "FAIL", report.to_json()
+    assert checks["uniqueness.invoice_lines.grain"].status == "PASS"
+    assert checks["integrity.invoice_lines.products"].status == "PASS"
+
+
+def test_missing_index_detected_on_clean_data(quality_sandbox):
+    mutate(quality_sandbox, f'DROP INDEX "{quality_sandbox.schema}"."idx_invoice_lines_date"')
+    _, checks = results(quality_sandbox)
+    assert checks["schema.indexes"].actual["missing"] == 1
+
+
+def test_unvalidated_fk_detected_on_clean_data(quality_sandbox):
+    table = qualified(quality_sandbox.schema, "invoice_lines")
+    drop_constraints(quality_sandbox, "f")
+    with quality_sandbox.engine.begin() as connection:
+        parent = qualified(quality_sandbox.schema, "products")
+        connection.execute(text(f"ALTER TABLE {table} ADD FOREIGN KEY (source_system, stock_code) "
+                                f"REFERENCES {parent} (source_system, stock_code) ON DELETE RESTRICT NOT VALID"))
+    _, checks = results(quality_sandbox)
+    assert checks["schema.foreign_keys"].status == "FAIL"
+    assert checks["integrity.invoice_lines.products"].status == "PASS"

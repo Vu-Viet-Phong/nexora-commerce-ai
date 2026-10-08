@@ -9,6 +9,7 @@ from src.quality.contracts import (
 )
 from src.quality.engine import run_query, schema_results, validate_database
 from src.quality.results import QualityReport, ValidationResult, compare, skipped
+from .test_metadata import enforcement_catalog
 
 
 def catalog():
@@ -35,6 +36,10 @@ def fake_engine(rows=None, failing=False):
         result.scalar_one.return_value = 0
         if "information_schema.columns" in sql:
             result.mappings.return_value.all.return_value = catalog() if rows is None else rows
+        if "FROM pg_constraint" in sql:
+            result.mappings.return_value.all.return_value = enforcement_catalog()[0]
+        if "FROM pg_index" in sql:
+            result.mappings.return_value.all.return_value = enforcement_catalog()[1]
         if "guest_lines" in sql:
             result.mappings.return_value.one.return_value = {"guest_lines": 2}
         if failing and "COUNT(*)" in sql and "guest_lines" not in sql:
