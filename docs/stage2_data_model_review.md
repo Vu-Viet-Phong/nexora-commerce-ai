@@ -5,7 +5,7 @@
 **Role:** Senior Data Architect & SQL QA Reviewer  
 **Input Dataset:** `data/processed/transactions_clean.parquet` (1,044,848 rows × 25 columns)  
 **Target Storage Engine:** PostgreSQL (Relational Warehouse & Dimensional Data Marts)  
-**Review Status:** **MILESTONE 2.2 FULLY APPROVED (LIVE POSTGRESQL VERIFIED) — AUTHORIZED FOR MILESTONE 2.3**
+**Review Status:** **MILESTONE 2.3 FULLY APPROVED (ATOMIC DATA LOADER VERIFIED) — AUTHORIZED FOR MILESTONE 2.4 (SQL ANALYTICS MARTS)**
 
 ---
 
@@ -277,46 +277,72 @@ An independent technical audit of Copilot's Milestone 2.1 delivery was conducted
 
 ## 9. Independent Review — Milestone 2.2 Live Verification Assessment
 
-**Status: STATIC SCHEMA DESIGN APPROVED — LIVE POSTGRESQL INTEGRATION PENDING TEST RUN**
+**Status: MILESTONE 2.2 FULLY APPROVED (LIVE POSTGRESQL VERIFIED IN COMMIT 39af9e6)**
 
-### 9.1 Test Coverage Audit (10 Critical Areas):
-1. **Table creation:** Verified via `test_postgres_integration.py` querying `information_schema.tables` for 4 core tables. (Status: **CODE READY, LIVE RUN PENDING**)
-2. **Primary key uniqueness:** Composite PKs enforced on `(source_system, ...)`. Duplicate PK table constraint cleanly removed in commit `9b16305`. (Status: **PASS**)
-3. **Foreign key integrity:** Dimension entities inserted before fact rows; referential relationships enforced. (Status: **CODE READY, LIVE RUN PENDING**)
-4. **UNIQUE constraints:** `(source_system, source_line_key)` and `(source_system, source_sheet, source_row_number)` verified. (Status: **PASS**)
-5. **NULL Customer ID:** Verified nullable FK allows inserting lines without customer ID while preserving referential integrity. (Status: **CODE READY, LIVE RUN PENDING**)
-6. **Invalid FK rejection:** Verified `IntegrityError` is raised and caught when referencing non-existent parent records. (Status: **CODE READY, LIVE RUN PENDING**)
-7. **NUMERIC precision:** Verified `NUMERIC(12,2)` / `NUMERIC(14,2)` arithmetic without float drift. (Status: **PASS**)
-8. **Transaction rollback:** Verified rollback behavior on nested transaction failure (`connection.begin_nested()`). (Status: **CODE READY, LIVE RUN PENDING**)
-9. **Schema re-application:** DDL execution inside transactional blocks. (Status: **PASS**)
-10. **Special transaction flags:** All 15 Stage 1 quality flags retained and tested. (Status: **PASS**)
+### 9.1 Test Coverage Audit (10 Critical Areas Verified Live):
+1. **Table creation:** Verified via `test_postgres_integration.py` querying `information_schema.tables` for all 4 core tables. (Status: **LIVE PASS**)
+2. **Primary key uniqueness:** Composite PKs enforced on `(source_system, ...)`. Duplicate PK table constraint cleanly removed in commit `9b16305`. (Status: **LIVE PASS**)
+3. **Foreign key integrity:** Dimension entities inserted before fact rows; referential relationships enforced with `ON DELETE RESTRICT`. (Status: **LIVE PASS**)
+4. **UNIQUE constraints:** `(source_system, source_line_key)` and `(source_system, source_sheet, source_row_number)` verified. (Status: **LIVE PASS**)
+5. **NULL Customer ID:** Verified nullable FK allows inserting lines without customer ID while preserving referential integrity. (Status: **LIVE PASS**)
+6. **Invalid FK rejection:** Verified `IntegrityError` is raised and caught when referencing non-existent parent records (`'missing-invoice'`, missing customer `999`). (Status: **LIVE PASS**)
+7. **NUMERIC precision:** Verified `NUMERIC(12,2)` / `NUMERIC(14,2)` arithmetic; generated `line_total` is `19.99` (0 float drift). (Status: **LIVE PASS**)
+8. **Transaction rollback:** Verified rollback behavior on nested transaction failure (`connection.begin_nested()`). (Status: **LIVE PASS**)
+9. **Schema re-application:** DDL execution inside transactional blocks. (Status: **LIVE PASS**)
+10. **Special transaction flags:** All 15 Stage 1 quality flags retained and tested. (Status: **LIVE PASS**)
 
-### 9.2 Verification Requirement for READY Sign-Off:
-- Copilot executes `pytest tests/test_sql/test_postgres_integration.py` against `nexora_commerce_test` on native PostgreSQL (`localhost:5432`) and records the live passing test run evidence.
+### 9.2 Sign-Off & Authorization:
+- Commit `39af9e6` successfully executes all 20 test cases (`20 passed in 2.34s`) on Native Windows PostgreSQL 16 (`localhost:5432`).
+- Milestone 2.2 is officially **READY (APPROVED)**. Milestone 2.3 is authorized to proceed.
 
 ---
 
-## 10. Milestone 2.3 — PostgreSQL Data Loader Specification (`src/data/load.py`)
+## 10. Milestone 2.3 — PostgreSQL Data Loader Review & Approval
 
-### 10.1 Transformation & Ingestion Pipeline:
-1. **Data Source:** Read `data/processed/transactions_clean.parquet` (1,044,848 rows × 25 columns).
-2. **`customers` Loader Logic (5,942 rows):**
-   - Filter `customer_id.notna()`.
-   - Aggregate: `primary_country` = mode (tie-break with latest country), `first_invoice_date` = `min(InvoiceDate)`, `last_invoice_date` = `max(InvoiceDate)`, `total_orders_lifetime` = count distinct valid sales `Invoice`, `total_merchandise_spend` = net spend on valid sales minus returns.
-   - Attach `source_system = 'UCI'`, `source_file_sha256`.
-3. **`products` Loader Logic (5,131 rows):**
-   - Group by normalized uppercase `StockCode`.
-   - Aggregate: `primary_description` = mode of non-null descriptions, `product_type` = classified type, `is_physical_merchandise` = boolean flag, `median_unit_price` = median of valid prices, `first_seen_date` = `min(InvoiceDate)`, `last_seen_date` = `max(InvoiceDate)`.
-   - Attach `source_system = 'UCI'`, `source_file_sha256`.
-4. **`invoices` Loader Logic (53,628 rows):**
-   - Group by `Invoice`.
-   - Aggregate: `customer_id` = first/unique customer ID (nullable), `invoice_date` = `min(InvoiceDate)` (resolves multi-minute timestamps), `country` = order country, `invoice_type` = classified order type (`SALE`, `CANCELLATION`, `INVENTORY_ADJUSTMENT`, `BAD_DEBT_ADJUSTMENT`), `total_line_count` = count of lines, `total_quantity` = sum of quantities, `total_invoice_amount` = sum of `line_total`.
-   - Attach `source_system = 'UCI'`, `source_file_sha256`.
-5. **`invoice_lines` Loader Logic (1,044,848 rows):**
-   - Generate deterministic 1-based `source_row_number` per sheet.
-   - Construct `source_line_key = f"{source_system}_{source_sheet}_{source_row_number}"`.
-   - Map all 15 boolean quality flags directly from Parquet.
-6. **Execution Protocol & Idempotency:**
-   - Execute inside an atomic transaction (`BEGIN ... COMMIT`).
-   - Idempotent reload: Truncate tables with `RESTART IDENTITY CASCADE` or use `ON CONFLICT DO UPDATE/NOTHING`.
-   - Rollback on error: Any exception triggers an immediate `ROLLBACK` ensuring zero corrupted/partial state.
+**Status: MILESTONE 2.3 FULLY APPROVED (ATOMIC DATA LOADER VERIFIED IN COMMIT 0c1b1a7)**
+
+### 10.1 Ingestion & Implementation Evaluation:
+- **Module Evaluated:** `src/data/load.py` (297 lines) & `tests/test_sql/test_loader_integration.py` (96 lines).
+- **Extraction & Transformation:** Read immutable `transactions_clean.parquet` and cleanly mapped 4 tables:
+  - `customers`: 5,942 entities (Mode country, missing IDs excluded).
+  - `products`: 5,131 products (Mode description, physical merchandise boolean).
+  - `invoices`: 53,628 orders (Timestamp canonical `MIN(InvoiceDate)`, nullable `customer_id`).
+  - `invoice_lines`: 1,044,848 transaction lines (All 15 Stage 1 quality flags, deterministic `source_line_key = f"UCI:{source_sheet}:{source_row_number}"`).
+- **High-Throughput Bulk Ingestion:** Implemented PostgreSQL native `COPY FROM STDIN` via `psycopg` cursor copy API with formatted in-memory CSV stream.
+- **Idempotency & Namespace Safety:** Implemented atomic delete-and-reload scoped strictly to `WHERE source_system = 'UCI'`. Re-running loader produces identical counts `(5942, 5131, 53628, 1044848)` with zero duplication. No hazardous global `TRUNCATE CASCADE`.
+- **Atomicity & Transaction Rollback:** Tested live with injected failure `fail_after="copy"`; SQLAlchemy transaction rolled back completely, preserving prior state without corrupted rows.
+- **Financial Reconciliation:**
+  - Total Ledger: **£18,909,762.12** (Exact match).
+  - Physical Returns: **-£719,692.94** (Exact match).
+  - Valid Sales: **£19,700,954.44** in SQL (Reconciled with 2-cent rounding contract difference from Parquet float sum £19,700,954.46).
+  - Missing Customer Rows: **235,287 rows** (Preserved with `customer_id = NULL`).
+- **Performance Evaluation:**
+  - Main DB Load Runtime: **188.25s** (~3.1 minutes for 1.04M rows across 4 tables).
+  - Integration Test Runtime: **606.08s** (covering full schema apply, initial load, SQL verification, idempotent reload, and fault injection rollback).
+- **Test Suite Status:** **21/21 passed (100%)**.
+
+---
+
+## 11. Milestone 2.4 — SQL Analytics Marts Architecture (`sql/marts/`)
+
+With the 3NF Core relational tables (`customers`, `products`, `invoices`, `invoice_lines`) fully loaded and reconciled, Stage 2 transitions to analytical dimensional data marts:
+
+```
+Relational 3NF Core (PostgreSQL)
+  ├── customers     (5,942 rows)
+  ├── products      (5,131 rows)
+  ├── invoices      (53,628 rows)
+  └── invoice_lines (1,044,848 rows)
+            │
+            ▼
+Analytical Data Marts (sql/marts/)
+  ├── mart_daily_sales.sql         (Grain: 1 row / calendar_day + country + is_physical_merchandise)
+  ├── mart_customer_daily.sql      (Grain: 1 row / customer_id + calendar_day)
+  └── mart_customer_snapshot.sql   (Grain: 1 row / customer_id | Exactly 5,942 rows)
+```
+
+### 11.1 Analytical Mart Specifications:
+1. `mart_daily_sales`: Aggregates daily sales velocity, returns, net revenue, order counts, and item quantities. Excludes inventory adjustments (`is_inventory_adjustment = FALSE`).
+2. `mart_customer_daily`: Tracks daily customer order frequency, gross spend, return spend, and net spend.
+3. `mart_customer_snapshot`: Full customer lifetime snapshot (RFM metrics, Recency relative to 2011-12-10 anchor, Frequency, Monetary, AOV, Tenure). Excludes missing customers (`customer_id IS NOT NULL`).
+4. **Acceptance Mandate:** Mart aggregates must reconcile 100% with Python Pandas ground truth metrics.
