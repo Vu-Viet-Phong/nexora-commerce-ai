@@ -621,3 +621,17 @@ thực tế vì Docker runtime không khả dụng.
 
 Milestone 2.2 sẽ xác định grain của từng bảng và tạo PostgreSQL schema, PK/FK,
 indexes cùng ERD dựa trên dữ liệu Stage 1 thực tế.
+
+## Milestone 2.1 — Database Foundation Review Checkpoint
+
+Milestone 2.1 đã được Gravity review và **APPROVED**. PostgreSQL
+development foundation, environment-variable separation, persistent volume,
+healthcheck và Stage 1 regression coverage đã được kiểm tra. Các tài liệu
+review và acceptance checklist trong `docs/` được giữ làm evidence cho
+Milestone 2.2.
+
+### Checkpoint Decision
+
+Milestone 2.2 được phép bắt đầu từ repository hiện tại. Schema phải được
+thiết kế từ `data/processed/transactions_clean.parquet` thực tế, không sửa
+processed data và không giả định lại các kết quả đã được Stage 1 xác nhận.
