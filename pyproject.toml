@@ -12,6 +12,7 @@ dependencies = [
     "numpy",
     "openpyxl",
     "pyarrow",
+    "scikit-learn",
     "SQLAlchemy",
     "psycopg[binary]",
 ]
