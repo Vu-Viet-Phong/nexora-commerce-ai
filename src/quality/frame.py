@@ -44,7 +44,7 @@ def foreign_keys(
     return compare("integrity.foreign_keys", 0, orphans)
 
 
-def line_business_rules(lines: pd.DataFrame) -> ValidationResult:
+def line_business_rules(lines: pd.DataFrame, *, prices_are_rounded: bool = True) -> ValidationResult:
     required = (
         "invoice_number", "stock_code", "customer_id", "description", "quantity", "unit_price",
         "is_cancellation", "is_bad_debt_adjustment", "is_negative_quantity", "is_return",
@@ -68,6 +68,12 @@ def line_business_rules(lines: pd.DataFrame) -> ValidationResult:
         "is_non_product": stock.isin(KNOWN_NON_PRODUCT_CODES) |
                           stock.str.startswith(KNOWN_NON_PRODUCT_PREFIXES, na=False),
     }
+    if prices_are_rounded:
+        # The raw price sign is ambiguous at rounded 0.00. Source validation
+        # calls this helper with prices_are_rounded=False before normalization.
+        rounded_zero = lines["unit_price"].eq(0)
+        for flag in ("has_valid_price", "is_price_zero", "is_price_negative"):
+            expected[flag] = expected[flag].where(~rounded_zero, lines[flag])
     expected["is_return"] = expected["is_cancellation"]
     expected["is_inventory_adjustment"] = (
         expected["is_negative_quantity"] & ~expected["is_cancellation"] &
@@ -81,7 +87,11 @@ def line_business_rules(lines: pd.DataFrame) -> ValidationResult:
         flag: int((lines[flag].isna() | lines[flag].ne(values)).fillna(True).sum())
         for flag, values in expected.items()
     }
-    return compare("business.line_flags", dict.fromkeys(expected, 0), violations)
+    price_flags = lines[["has_valid_price", "is_price_zero", "is_price_negative"]]
+    violations["price_flag_partition"] = int(
+        (price_flags.isna().any(axis=1) | price_flags.sum(axis=1).ne(1)).sum()
+    )
+    return compare("business.line_flags", dict.fromkeys(violations, 0), violations)
 
 
 def monetary_total(values) -> Decimal:

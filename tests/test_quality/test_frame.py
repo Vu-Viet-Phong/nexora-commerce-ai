@@ -59,3 +59,11 @@ def test_business_rule_violations_detected_offline(tmp_path, flag):
     result = line_business_rules(lines)
     assert result.status == "FAIL"
     assert result.actual[flag] == 1
+
+
+def test_raw_price_flags_are_preserved_at_rounded_zero(tmp_path):
+    from .test_source import raw_row
+    *_, lines = prepare_frames(make_source(tmp_path, [raw_row("1", price=0.001)]))
+    assert lines.iloc[0]["unit_price"] == 0
+    assert line_business_rules(lines).status == "PASS"
+    assert line_business_rules(lines, prices_are_rounded=False).status == "FAIL"

@@ -115,9 +115,12 @@ def core_checks(schema: str) -> list[Check]:
         "bad_debt": "is_bad_debt_adjustment IS DISTINCT FROM (UPPER(invoice_number) LIKE 'A%')",
         "return": "is_return IS DISTINCT FROM is_cancellation",
         "negative_quantity": "is_negative_quantity IS DISTINCT FROM (quantity < 0)",
-        "price_flags": "is_price_zero IS DISTINCT FROM (unit_price = 0) OR "
-                       "is_price_negative IS DISTINCT FROM (unit_price < 0) OR "
-                       "has_valid_price IS DISTINCT FROM (unit_price > 0)",
+        # Flags describe raw Price, before loader rounding. A small nonzero
+        # raw price can legitimately become NUMERIC 0.00 in PostgreSQL.
+        "price_flags": "(has_valid_price::int + is_price_zero::int + is_price_negative::int <> 1) OR "
+                       "(unit_price > 0 AND NOT has_valid_price) OR "
+                       "(unit_price < 0 AND NOT is_price_negative) OR "
+                       "(unit_price <> 0 AND is_price_zero)",
         "inventory_adjustment": "is_inventory_adjustment IS DISTINCT FROM "
                                 "(quantity < 0 AND NOT is_cancellation AND is_price_zero AND customer_id IS NULL)",
         "valid_sale": "is_valid_sale IS DISTINCT FROM (NOT is_cancellation AND NOT "

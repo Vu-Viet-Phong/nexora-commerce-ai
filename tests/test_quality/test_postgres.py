@@ -1,5 +1,9 @@
 """All writes here are to the explicitly opted-in Codex-owned sandbox."""
 from decimal import Decimal
+import json
+import os
+import subprocess
+import sys
 
 import pytest
 from sqlalchemy import event, text
@@ -183,3 +187,37 @@ def test_opt_in_full_data_source_reconciliation(quality_sandbox):
     source_results = [r for r in report.results if r.name.startswith("source.")]
     assert all(r.status == "PASS" for r in source_results), report.to_json()
     assert checks["source.row_counts"].actual["invoice_lines"] > 0
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_cli_end_to_end_reports_and_exit_codes(quality_sandbox, tmp_path, corrupt):
+    if corrupt:
+        table = qualified(quality_sandbox.schema, "invoice_lines")
+        mutate(quality_sandbox, f"UPDATE {table} SET is_valid_sale = FALSE WHERE source_row_number = 1")
+    env = {**os.environ, "DATABASE_URL": os.environ["NEXORA_QUALITY_TEST_DATABASE_URL"]}
+    completed = subprocess.run(
+        [sys.executable, "-m", "src.quality", "--schema", quality_sandbox.schema,
+         "--source", str(quality_sandbox.source_path),
+         "--json-out", str(tmp_path / "quality.json"),
+         "--markdown-out", str(tmp_path / "quality.md")],
+        env=env, capture_output=True, text=True, check=False, timeout=30,
+    )
+    assert completed.returncode == (1 if corrupt else 0), completed.stdout
+    report = json.loads(completed.stdout)
+    assert report == json.loads((tmp_path / "quality.json").read_text(encoding="utf-8"))
+    assert report["gate_summary"]["status"] == ("FAIL" if corrupt else "PASS")
+    assert report["summary"]["SKIP"] == 3
+    assert report["execution_ms"] > 0
+    assert '"customer_id":' not in json.dumps([r["actual"] for r in report["results"]])
+    assert "Relational core/source gate:" in (tmp_path / "quality.md").read_text(encoding="utf-8")
+
+
+def test_raw_price_flags_survive_rounding_and_negative_zero(quality_sandbox, tmp_path):
+    from src.data.load import load_source
+    from .test_source import make_source, raw_row
+    path = make_source(tmp_path, [raw_row("1", price=0.001), raw_row("2", price=-0.001)])
+    load_source(os.environ["NEXORA_QUALITY_TEST_DATABASE_URL"], path, schema=quality_sandbox.schema)
+    report, checks = results(quality_sandbox)
+    assert checks["business.price_flags"].status == "PASS"
+    assert checks["source.records"].status == "PASS", report.to_json()
+    assert report.gate_summary["status"] == "PASS", report.to_json()

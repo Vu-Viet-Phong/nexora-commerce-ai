@@ -107,3 +107,20 @@ def test_zero_batch_and_unreadable_source_errors(tmp_path):
         source_expectations(make_source(tmp_path), batch_size=0)
     with pytest.raises((FileNotFoundError, OSError)):
         source_expectations(tmp_path / "missing.parquet")
+
+
+def test_source_rejects_inconsistent_business_flags(tmp_path):
+    path = make_source(tmp_path)
+    frame = pd.read_parquet(path)
+    frame.loc[0, "is_valid_sale"] = False
+    frame.to_parquet(path, index=False)
+    with pytest.raises(ValueError, match="business flags"):
+        source_expectations(path)
+
+
+def test_source_handles_raw_nonzero_prices_rounding_to_zero(tmp_path):
+    path = make_source(tmp_path, [raw_row("1", 1, 0.001), raw_row("2", 1, -0.001)])
+    expected = source_expectations(path)
+    assert expected["money"]["ledger"] == Decimal("0.00")
+    assert expected["flag_counts"]["has_valid_price"] == 1
+    assert expected["flag_counts"]["is_price_negative"] == 1

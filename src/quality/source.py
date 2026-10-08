@@ -19,6 +19,7 @@ from sqlalchemy import text
 from src.data.ingest import ORIGINAL_COLUMNS
 from src.data.load import LINE_COLUMNS, SOURCE_SYSTEM
 from .contracts import TABLE_COLUMNS, qualified
+from .frame import line_business_rules, missing_values
 from .results import ValidationResult, compare, skipped
 
 FLAGS = tuple(c for c in LINE_COLUMNS if c.startswith(("is_", "has_")))
@@ -54,7 +55,9 @@ def fingerprint(row: dict) -> bytes:
         elif column == "invoice_date":
             values.append(pd.Timestamp(value).to_pydatetime(warn=False).isoformat())
         elif column == "unit_price":
-            values.append(format(Decimal(str(value)).quantize(CENT), ".2f"))
+            money = Decimal(str(value)).quantize(CENT)
+            # PostgreSQL NUMERIC normalizes signed zero; fingerprints must too.
+            values.append(format(abs(money) if money == 0 else money, ".2f"))
         elif column in ("customer_id", "quantity", "source_row_number"):
             values.append(int(value))
         elif column in FLAGS:
@@ -82,14 +85,23 @@ def source_expectations(path: Path, *, batch_size: int = 50_000) -> dict:
     for batch in parquet.iter_batches(batch_size=batch_size, columns=list(REQUIRED_SOURCE)):
         frame = batch.to_pandas()
         required_values = [c for c in REQUIRED_SOURCE if c not in ("Customer ID", "Description")]
-        if frame[required_values].isna().any().any():
+        if missing_values(frame, tuple(required_values)).status == "FAIL":
             raise ValueError("Parquet contains NULL values in required fields")
+        source_lines = frame.rename(columns={
+            "Invoice": "invoice_number", "StockCode": "stock_code",
+            "Customer ID": "customer_id", "Description": "description",
+            "Quantity": "quantity", "Price": "unit_price",
+        })
+        if line_business_rules(source_lines, prices_are_rounded=False).status == "FAIL":
+            raise ValueError("Parquet business flags do not match Stage 1 contracts")
         frame["Price"] = frame["Price"].round(2)
         for raw in frame.to_dict("records"):
             sheet = str(raw["source_sheet"])
             positions[sheet] += 1
             position = positions[sheet]
             customer = None if pd.isna(raw["Customer ID"]) else int(raw["Customer ID"])
+            if customer is not None and raw["Customer ID"] != customer:
+                raise ValueError("Customer ID must match the loader integer contract")
             if float(raw["Quantity"]) != int(raw["Quantity"]):
                 raise ValueError("Quantity must match the loader integer contract")
             quantity = int(raw["Quantity"])
@@ -123,6 +135,8 @@ def source_expectations(path: Path, *, batch_size: int = 50_000) -> dict:
             for flag in FLAGS:
                 flag_counts[flag] += row[flag]
     money["net_merchandise"] = money["gross_sales"] + money["merchandise_returns"]
+    if file_sha256(path) != sha:
+        raise ValueError("Parquet changed while source expectations were built")
     return {
         "row_counts": {**{t: len(v) for t, v in keys.items()}, "invoice_lines": len(record_hashes)},
         "dimension_keys": keys, "record_hashes": record_hashes,

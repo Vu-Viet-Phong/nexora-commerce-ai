@@ -61,12 +61,21 @@ class QualityReport:
     def summary(self) -> dict[str, Any]:
         counts = Counter(result.status for result in self.results)
         # SKIP means incomplete coverage, never a green quality gate.
-        status = "FAIL" if counts["FAIL"] else ("SKIP" if counts["SKIP"] else "PASS")
+        status = "FAIL" if counts["FAIL"] else ("SKIP" if counts["SKIP"] or not self.results else "PASS")
         return {"status": status, "total": len(self.results),
                 **{key: counts[key] for key in ("PASS", "FAIL", "SKIP")}}
 
+    @property
+    def gate_summary(self) -> dict[str, Any]:
+        """Only the relational core/source gate; marts are explicitly deferred."""
+        required = [r for r in self.results if not r.name.startswith("marts.")]
+        counts = Counter(r.status for r in required)
+        status = "FAIL" if counts["FAIL"] else ("SKIP" if counts["SKIP"] or not required else "PASS")
+        return {"scope": "relational_core_and_source", "status": status,
+                "total": len(required), **{key: counts[key] for key in ("PASS", "FAIL", "SKIP")}}
+
     def as_dict(self) -> dict[str, Any]:
-        return {**asdict(self), "summary": self.summary}
+        return {**asdict(self), "summary": self.summary, "gate_summary": self.gate_summary}
 
     def to_json(self) -> str:
         def encode(value: Any) -> str:
@@ -86,6 +95,8 @@ class QualityReport:
             f"Overall: {self.summary['status']}; checks: {self.summary['total']}; "
             f"PASS: {self.summary['PASS']}; FAIL: {self.summary['FAIL']}; "
             f"SKIP: {self.summary['SKIP']}; runtime: {self.execution_ms:.2f} ms.",
+            f"Relational core/source gate: {self.gate_summary['status']}. "
+            "Mart checks are deferred until Milestone 2.4 approval.",
             "",
             "| Validation | Expected | Actual | Status | ms | Reason |",
             "|---|---|---|---|---:|---|",

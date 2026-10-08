@@ -38,7 +38,7 @@ def fake_engine(rows=None, failing=False):
         if "guest_lines" in sql:
             result.mappings.return_value.one.return_value = {"guest_lines": 2}
         if failing and "COUNT(*)" in sql and "guest_lines" not in sql:
-            raise RuntimeError("postgresql://secret:password@private/secret customer")
+            raise RuntimeError("sentinel-sensitive-value in a private database parameter")
         return result
 
     connection.execute.side_effect = execute
@@ -142,7 +142,7 @@ def test_runner_continues_after_individual_query_failure():
     report = validate_database(engine)
     assert len([r for r in report.results if r.name.startswith("business.")]) >= 10
     assert report.summary["FAIL"] >= 10
-    assert "password" not in report.to_json()
+    assert "sentinel-sensitive-value" not in report.to_json()
 
 
 def test_report_decimals_and_skip_are_not_false_pass(tmp_path):
