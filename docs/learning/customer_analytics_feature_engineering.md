@@ -136,6 +136,16 @@ Smoke test read-only trên `nexora_commerce` chạy thành công:
 - Temporal daily rows: **604**.
 - Tổng frequency: **36.594** trong bounded feature query.
 - Tổng customer monetary: **£16,411,894.73**, khớp customer mart.
+- Daily net sales: median **£719.07**, p95 **£32,078.92**, max
+  **£105,983.79**, min **-£11,880.84**.
+- Customer monetary: p50 **£825.73**, p90 **£5,180.62**, p99 **£26,342.82**,
+  max **£578,408.64**.
+- Top 100 customer positive-monetary share: **36.68%**, cho thấy long-tail
+  đáng kể; positive-monetary customer count là **5.832**.
+- Physical return value **-£719,692.94**, returned units **469.882**, và
+  1.269 daily mart groups có return.
+- Missing customer lines: **235.287 / 1.044.848**, missing-customer ledger
+  **£2,566,093.08**; các line này vẫn giữ ở company mart nhưng không vào RFM.
 
 Kết quả này chứng minh pipeline thực sự đọc relational core/marts đã duyệt,
 không dùng raw data hay dữ liệu giả. Các bảng EDA chi tiết được trả về ở

@@ -874,3 +874,33 @@ Runtime đo được bằng `.venv` Python 3.11.16: regression suite **16 passed
 224.67s**. Test full loader không chạy lại ở checkpoint này; mart test tự tạo
 schema UUID riêng, load trong namespace riêng rồi teardown `CASCADE`, nên
 không đụng database/test schema của worktree khác.
+
+### Stage 3 Analytics — Customer Analytics, EDA và Feature Engineering
+
+Checkpoint `feat/customer-analytics` triển khai
+[`src/analytics/customer_analytics.py`](../src/analytics/customer_analytics.py)
+và tài liệu
+[`docs/learning/customer_analytics_feature_engineering.md`](learning/customer_analytics_feature_engineering.md).
+Feature query chỉ đọc `mart_customer_daily`, cắt theo `as_of_date`, aggregate
+về đúng một row/customer rồi validate uniqueness, numeric finite values và
+non-negative temporal metrics. Vì chỉ trả khoảng 5.942 customer rows về
+Python, pipeline không load 1 triệu fact lines vào RAM.
+
+Production output hiện chỉ có các feature đã có contract: recency,
+frequency, monetary, AOV và tenure, cùng customer ID, country và reference
+date. Distinct products, return frequency, purchase time activity và
+spending variability được ghi nhận pending vì metric contract chưa định nghĩa
+cửa sổ và denominator; chưa đưa vào ML output.
+
+EDA read-only có đủ 10 nhóm: sales distribution, customer behavior, order
+frequency, spending, product popularity, country, returns, missing customer
+ID, temporal pattern và sparsity/long-tail. Kết quả thật trên
+`nexora_commerce`: 5.942 feature rows, 10/10 EDA sections, customer
+monetary £16,411,894.73, top-100 positive-monetary share 36.68%, missing
+customer lines 235.287/1.044.848 và return value -£719,692.94.
+
+Unit tests analytics **5 passed**; full suite trong worktree
+**20 passed, 7 skipped trong 0.91s**. Read-only smoke test database thật
+pass. Một lỗi SQL long-tail do ambiguous `frequency` đã được sửa bằng cách
+bỏ join dư thừa và tính top-100 share trực tiếp trên CTE ranked. Không có
+database write, customer artifact hoặc secret nào được commit.
