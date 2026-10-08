@@ -904,3 +904,34 @@ Unit tests analytics **5 passed**; full suite trong worktree
 pass. Một lỗi SQL long-tail do ambiguous `frequency` đã được sửa bằng cách
 bỏ join dư thừa và tính top-100 share trực tiếp trên CTE ranked. Không có
 database write, customer artifact hoặc secret nào được commit.
+
+### Stage 3 Analytics — Customer Segmentation Baseline
+
+Branch `feat/customer-analytics` tiếp tục xây dựng baseline segmentation từ
+customer features đã có. `scikit-learn` được thêm vào dependency manifest;
+code mới tại
+[`src/segmentation/rfm_segmentation.py`](../src/segmentation/rfm_segmentation.py)
+không sửa SQL marts và không lưu model/customer artifact lớn.
+
+RFM rule-based scoring dùng quantile 1--5 với recency đảo chiều, frequency và
+monetary cùng chiều. Rule thresholds là thử nghiệm, chưa phải business
+contract. Kết quả thật trên 5.942 customers: Champions 1.282, Loyal
+Customers 1.128, Potential Loyalists 697, At Risk 830, Lost Customers 1.601,
+Other 404. Coverage đủ 100%.
+
+K-Means dùng `signed_log1p` cho R/F/M để xử lý monetary âm và long-tail, sau
+đó `StandardScaler`, random seed 42, `n_init=20`. Benchmark k=2..8 chọn k=2
+theo silhouette cao nhất **0.425752**. Hai cluster có 2.452 và 3.490
+customers; profile raw cho thấy cluster 0 gần đây hơn, frequency và monetary
+cao hơn. Stability giữa seed 42/43 đạt ARI **0.997306**. Đây là kết quả
+thực nghiệm, chưa phải production approval.
+
+Edge case quan trọng: 90 customer không có valid sale có recency NULL. Source
+feature giữ NULL; riêng modelling copy impute thành `max(active recency)+1`.
+Return-only customer có monetary âm được giữ nguyên; không dùng `log1p` máy
+móc vì sẽ lỗi miền giá trị hoặc làm mất dấu.
+
+Segmentation tests **6 passed**; full suite sau dependency/code
+**26 passed, 7 skipped**. Các kiểm tra gồm scoring, coverage, missing value,
+negative monetary, deterministic clustering, invalid/empty input, cluster
+profile và stability. Không dùng accuracy vì không có ground-truth labels.
