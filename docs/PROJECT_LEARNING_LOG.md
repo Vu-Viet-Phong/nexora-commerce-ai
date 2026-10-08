@@ -698,3 +698,10 @@ namespace, source sheet và deterministic source row ordinal. `line_id` chỉ l�
 internal identity và không thay thế source provenance. SHA-256, sheet và row
 ordinal được lưu để truy nguyên file nguồn. `line_total` là generated
 `NUMERIC` từ quantity và unit price; raw/processed Parquet không bị sửa.
+
+Chi tiết lý thuyết, ví dụ SQL, kiểm thử static/integration và các giới hạn
+runtime của Milestone 2.2 được ghi tại
+[`docs/learning/stage_02_postgresql_sql.md`](learning/stage_02_postgresql_sql.md).
+Static tests và processed-source reconciliation đã chạy; live PostgreSQL DDL
+chưa chạy vì Docker/Compose/psql chưa khả dụng. Database-level reconciliation
+được để lại như điều kiện của Milestone 2.3.

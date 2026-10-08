@@ -85,7 +85,7 @@ bad-debt adjustments, and non-product records.
 | invoice_date | TIMESTAMP WITHOUT TIME ZONE | No | `InvoiceDate` | Line event timestamp | Preserve source timestamp | May differ slightly from header |
 | quantity | INTEGER | No | `Quantity` | Line quantity | Preserve signs | Returns/cancellations remain |
 | unit_price | NUMERIC(12,2) | No | `Price` | Line unit price | Convert from source float to decimal | No FLOAT storage |
-| line_total | NUMERIC(14,2) generated | Yes | quantity and unit_price | Line ledger amount | Generated exact decimal product | Nullable metadata reflects generated SQL |
+| line_total | NUMERIC(14,2) generated | No | quantity and unit_price | Line ledger amount | Generated exact decimal product | `NOT NULL`; inputs are non-null |
 | is_duplicate_within_sheet | BOOLEAN | No | Stage 1 flag | Within-sheet ambiguity flag | Preserve flag | Not silently dropped |
 | is_duplicate_cross_sheet | BOOLEAN | No | Stage 1 flag | Cross-sheet duplicate flag | Preserve flag | Stage 1 handles exact overlap |
 | is_cancellation | BOOLEAN | No | Stage 1 flag | Cancellation indicator | Preserve flag | Prefix `C` behavior |

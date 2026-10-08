@@ -55,11 +55,21 @@ erDiagram
         int quantity
         numeric unit_price
         numeric line_total
-        boolean is_valid_sale
+        boolean is_duplicate_within_sheet
+        boolean is_duplicate_cross_sheet
         boolean is_cancellation
+        boolean is_bad_debt_adjustment
+        boolean is_negative_quantity
         boolean is_return
         boolean is_inventory_adjustment
-        boolean is_bad_debt_adjustment
+        boolean has_customer_id
+        boolean has_description
+        boolean has_valid_price
+        boolean is_price_zero
+        boolean is_price_negative
+        boolean is_non_product
+        boolean is_unknown_special_code
+        boolean is_valid_sale
     }
 
     customers ||--o{ invoices : "customer_id"
@@ -83,3 +93,8 @@ erDiagram
 The source namespace is part of every entity identity. This prevents an
 invoice or stock code from UCI being accidentally joined to an identically
 named key from MMRec or Amazon.
+
+`invoice_lines` also enforces uniqueness for
+`(source_system, source_line_key)` and
+`(source_system, source_sheet, source_row_number)`. These are source
+provenance constraints rather than additional business grains.

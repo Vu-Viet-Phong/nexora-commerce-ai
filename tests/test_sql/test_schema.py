@@ -21,6 +21,7 @@ def test_expected_primary_keys_exist() -> None:
     assert "PRIMARY KEY (source_system, stock_code)" in sql
     assert "PRIMARY KEY (source_system, invoice_number)" in sql
     assert "line_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY" in sql
+    assert sql.count("PRIMARY KEY (line_id)") == 0
 
 
 def test_expected_foreign_keys_exist() -> None:
@@ -65,3 +66,31 @@ def test_stable_invoice_line_identifier_and_indexes_exist() -> None:
         "idx_invoice_lines_date",
     ):
         assert f"CREATE INDEX {index_name}" in sql
+
+
+def test_all_stage1_quality_flags_are_stored() -> None:
+    sql = schema_text()
+    for flag in (
+        "is_duplicate_within_sheet",
+        "is_duplicate_cross_sheet",
+        "is_cancellation",
+        "is_bad_debt_adjustment",
+        "is_negative_quantity",
+        "is_return",
+        "is_inventory_adjustment",
+        "has_customer_id",
+        "has_description",
+        "has_valid_price",
+        "is_price_zero",
+        "is_price_negative",
+        "is_non_product",
+        "is_unknown_special_code",
+        "is_valid_sale",
+    ):
+        assert f"{flag} BOOLEAN NOT NULL" in sql
+
+
+def test_generated_line_total_is_non_null_numeric() -> None:
+    sql = schema_text()
+    assert "line_total NUMERIC(14, 2) NOT NULL" in sql
+    assert "GENERATED ALWAYS AS" in sql

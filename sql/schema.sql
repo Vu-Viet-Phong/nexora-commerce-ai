@@ -71,7 +71,7 @@ CREATE TABLE invoice_lines (
     invoice_date TIMESTAMP WITHOUT TIME ZONE NOT NULL,
     quantity INTEGER NOT NULL,
     unit_price NUMERIC(12, 2) NOT NULL,
-    line_total NUMERIC(14, 2)
+    line_total NUMERIC(14, 2) NOT NULL
         GENERATED ALWAYS AS (
             ROUND(quantity::NUMERIC * unit_price, 2)
         ) STORED,
@@ -90,7 +90,6 @@ CREATE TABLE invoice_lines (
     is_non_product BOOLEAN NOT NULL,
     is_unknown_special_code BOOLEAN NOT NULL,
     is_valid_sale BOOLEAN NOT NULL,
-    PRIMARY KEY (line_id),
     UNIQUE (source_system, source_line_key),
     UNIQUE (source_system, source_sheet, source_row_number),
     CHECK (invoice_number <> ''),
