@@ -328,9 +328,11 @@ tests/test_dashboard.py::test_compute_customer_distributions PASSED
 tests/test_dashboard.py::test_compute_customer_distributions_empty PASSED
 tests/test_dashboard.py::test_compute_rfm_segments_empty_dataframe PASSED
 tests/test_dashboard.py::test_compute_rfm_segments_handles_null_recency_and_assigns_segments PASSED
+tests/test_dashboard.py::test_summarize_rfm_segments PASSED
+tests/test_dashboard.py::test_summarize_rfm_segments_empty PASSED
 tests/test_dashboard.py::test_missing_table_raises_database_query_error PASSED
 
-============================= 21 passed in 1.18s ==============================
+============================= 23 passed in 1.19s ==============================
 ```
 
 ---
@@ -343,12 +345,16 @@ tests/test_dashboard.py::test_missing_table_raises_database_query_error PASSED
   - Bộ điều khiển độ phân giải thời gian (Daily, Weekly, Monthly) với line chart, bar chart và cumulative revenue area chart.
   - Phân tích thị trường quốc tế với tỉ trọng thị phần (Market Share %) và bảng chi tiết doanh thu theo quốc gia.
   - Thẻ thông tin kiểm soát dữ liệu và phân loại hàng hóa vật lý (Physical Merchandise).
-- **Checkpoint C:** Hoàn thiện Customer Analytics Section:
+- **Checkpoint C (`3d79f98`):** Hoàn thiện Customer Analytics Section:
   - 5 KPI cards mở rộng: Tổng khách hàng (5,942), Tỷ lệ khách mua lại (Repeat Rate: 71.3%), Tổng chi tiêu trọn đời (£16.41M), AOV (£386.11), Vòng đời trung bình (474.5 ngày).
   - Phân bố tần suất mua hàng (One-Time, Occasional, Frequent, VIP Power Buyers) và các phân khúc ngân sách chi tiêu.
   - Biểu đồ chuỗi thời gian người mua hoạt động hàng ngày (Active Buyers) và chi tiêu hàng ngày từ `mart_customer_daily`.
   - Bảng xếp hạng Top 15 khách hàng VIP có giá trị chi tiêu cao nhất kèm thông tin quốc gia, số đơn, AOV và ngày mua cuối.
-- **Checkpoint D:** (Kế tiếp) Hoàn thiện RFM Analytics Section.
+- **Checkpoint D:** Hoàn thiện RFM Analytics Section:
+  - Thẻ chỉ số phân khúc chiến lược: Champions (22.0% khách, đóng góp 69.7% doanh thu), Loyal Customers (15.6% doanh thu), At Risk (8.1% doanh thu cần win-back khẩn cấp), Lost Accounts.
+  - Biểu đồ phân bổ 3 thành phần điểm số R-Score (1-5), F-Score (1-5), M-Score (1-5).
+  - Bảng ma trận đóng góp doanh thu theo phân khúc RFM kèm biểu đồ cơ cấu trực quan.
+  - Công cụ drilldown chọn từng phân khúc khách hàng kèm khuyến nghị chiến lược CRM hành động thực tế.
 - **Checkpoint E:** (Kế tiếp) Hoàn thiện toàn diện, kiểm tra an ninh và kiểm thử hồi quy.
 
 ---

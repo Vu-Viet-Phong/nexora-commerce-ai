@@ -34,6 +34,7 @@ from app.queries import (
     load_env_config,
     normalize_db_url,
     resample_sales_trend,
+    summarize_rfm_segments,
 )
 
 
@@ -327,6 +328,24 @@ def test_compute_rfm_segments_handles_null_recency_and_assigns_segments():
 
     # Customer 5 with NaN recency should not crash and receive lowest r_score
     assert segmented.loc[segmented["customer_id"] == 5, "r_score"].iloc[0] == 1
+
+
+def test_summarize_rfm_segments(sqlite_engine):
+    raw_df = get_rfm_snapshot(sqlite_engine)
+    segmented = compute_rfm_segments(raw_df)
+    summary = summarize_rfm_segments(segmented)
+
+    assert "Segment" in summary.columns
+    assert "Revenue Share (%)" in summary.columns
+    assert summary["Customer Count"].sum() == len(raw_df)
+    assert round(summary["Revenue Share (%)"].sum(), 1) == pytest.approx(100.0, abs=0.5)
+
+
+def test_summarize_rfm_segments_empty():
+    empty_df = pd.DataFrame()
+    res = summarize_rfm_segments(empty_df)
+    assert res.empty
+    assert "Segment" in res.columns
 
 
 # ============================================================================

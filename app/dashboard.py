@@ -31,6 +31,7 @@ from app.queries import (
     get_sales_kpis,
     get_top_customers,
     resample_sales_trend,
+    summarize_rfm_segments,
 )
 
 # ============================================================================
@@ -523,20 +524,183 @@ def main():
             st.error(f"Query error in Customer Analytics: {err}")
 
     # ========================================================================
-    # TAB 3: RFM SEGMENTATION (Skeleton preview for Checkpoint A)
+    # TAB 3: RFM SEGMENTATION (Checkpoint D Implementation)
     # ========================================================================
     with tab_rfm:
         try:
             rfm_data = fetch_rfm_data(engine, country=country_choice)
-            st.subheader("Customer RFM Distribution & Segments")
+
+            # 1. Executive RFM Summary Cards
+            st.markdown("### 🎯 Strategic RFM Segments Summary")
+
             if not rfm_data.empty:
-                segment_counts = rfm_data["rfm_segment"].value_counts().reset_index()
-                segment_counts.columns = ["Segment", "Customer Count"]
-                col_rfm_chart, col_rfm_table = st.columns([1, 1])
-                with col_rfm_chart:
-                    st.bar_chart(segment_counts.set_index("Segment")["Customer Count"])
-                with col_rfm_table:
-                    st.dataframe(segment_counts, use_container_width=True)
+                rfm_summary = summarize_rfm_segments(rfm_data)
+
+                champ_row = rfm_summary[rfm_summary["Segment"] == "Champions"]
+                loyal_row = rfm_summary[rfm_summary["Segment"] == "Loyal Customers"]
+                risk_row = rfm_summary[rfm_summary["Segment"] == "At Risk"]
+                lost_row = rfm_summary[rfm_summary["Segment"] == "Lost"]
+
+                champ_count = int(champ_row["Customer Count"].iloc[0]) if not champ_row.empty else 0
+                champ_rev_pct = float(champ_row["Revenue Share (%)"].iloc[0]) if not champ_row.empty else 0.0
+
+                loyal_count = int(loyal_row["Customer Count"].iloc[0]) if not loyal_row.empty else 0
+                loyal_rev_pct = float(loyal_row["Revenue Share (%)"].iloc[0]) if not loyal_row.empty else 0.0
+
+                risk_count = int(risk_row["Customer Count"].iloc[0]) if not risk_row.empty else 0
+                risk_rev_pct = float(risk_row["Revenue Share (%)"].iloc[0]) if not risk_row.empty else 0.0
+
+                lost_count = int(lost_row["Customer Count"].iloc[0]) if not lost_row.empty else 0
+                lost_cust_pct = float(lost_row["Customer Share (%)"].iloc[0]) if not lost_row.empty else 0.0
+
+                c1, c2, c3, c4 = st.columns(4)
+                with c1:
+                    st.metric(
+                        label="Champions (VIP)",
+                        value=f"{champ_count:,}",
+                        delta=f"{champ_rev_pct:.1f}% Total Revenue",
+                        help="Most recent, frequent, and highest spenders. Core revenue drivers.",
+                    )
+                with c2:
+                    st.metric(
+                        label="Loyal Customers",
+                        value=f"{loyal_count:,}",
+                        delta=f"{loyal_rev_pct:.1f}% Total Revenue",
+                        help="Consistent buyers with strong lifetime engagement.",
+                    )
+                with c3:
+                    st.metric(
+                        label="At Risk Accounts",
+                        value=f"{risk_count:,}",
+                        delta=f"{risk_rev_pct:.1f}% Historical Revenue",
+                        delta_color="inverse",
+                        help="Previously high-value buyers who have not purchased recently. Win-back priority.",
+                    )
+                with c4:
+                    st.metric(
+                        label="Lost Accounts",
+                        value=f"{lost_count:,}",
+                        delta=f"{lost_cust_pct:.1f}% Customer Base",
+                        delta_color="inverse",
+                        help="Longest inactive customers with lowest frequency.",
+                    )
+
+                st.divider()
+
+                # 2. RFM Component Distributions (R, F, M Scores)
+                st.markdown("### 📊 RFM Quintile Score Distributions (1 = Lowest, 5 = Highest)")
+                c_r, c_f, c_m = st.columns(3)
+
+                with c_r:
+                    st.subheader("Recency (R-Score)")
+                    r_counts = rfm_data["r_score"].value_counts().sort_index()
+                    st.bar_chart(r_counts, color="#1E88E5")
+                    st.caption("5: Recent (<=30 days) | 1: Inactive (>365 days)")
+
+                with c_f:
+                    st.subheader("Frequency (F-Score)")
+                    f_counts = rfm_data["f_score"].value_counts().sort_index()
+                    st.bar_chart(f_counts, color="#43A047")
+                    st.caption("5: Highest repeat orders | 1: Single order")
+
+                with c_m:
+                    st.subheader("Monetary (M-Score)")
+                    m_counts = rfm_data["m_score"].value_counts().sort_index()
+                    st.bar_chart(m_counts, color="#FB8C00")
+                    st.caption("5: Top net spenders | 1: Minimal spend")
+
+                st.divider()
+
+                # 3. Comprehensive Segment Revenue Contribution Matrix
+                st.markdown("### 🏛️ Segment Revenue Contribution & Pareto Profile")
+                col_chart_c, col_chart_r = st.columns(2)
+
+                with col_chart_c:
+                    st.subheader("Customer Count by Segment")
+                    bar_cust = rfm_summary.set_index("Segment")["Customer Count"]
+                    st.bar_chart(bar_cust, color="#1E88E5")
+
+                with col_chart_r:
+                    st.subheader("Total Revenue (£) by Segment")
+                    bar_rev = rfm_summary.set_index("Segment")["Total Revenue (£)"]
+                    st.bar_chart(bar_rev, color="#43A047")
+
+                st.dataframe(
+                    rfm_summary.style.format({
+                        "Customer Count": "{:,.0f}",
+                        "Customer Share (%)": "{:.2f}%",
+                        "Total Revenue (£)": "£{:,.2f}",
+                        "Revenue Share (%)": "{:.2f}%",
+                        "Avg Spend (£)": "£{:,.2f}",
+                        "Avg Recency (Days)": "{:.1f}",
+                        "Avg Frequency": "{:.1f}",
+                    }),
+                    use_container_width=True,
+                )
+
+                st.divider()
+
+                # 4. Interactive Segment Drilldown & Strategic CRM Actions
+                st.markdown("### 🎯 Segment Customer Drilldown & CRM Strategy")
+
+                segment_list = rfm_summary["Segment"].tolist()
+                selected_segment = st.selectbox(
+                    "Choose Segment to Inspect",
+                    options=segment_list,
+                    index=0,
+                    help="Select a segment to inspect individual accounts and CRM strategies.",
+                )
+
+                # Segment Recommendation Cards
+                STRATEGIES: dict[str, str] = {
+                    "Champions": "💎 **Reward & Retain:** VIP concierge service, early access to new product drops, personalized appreciation gifts, and referral advocate incentives.",
+                    "Loyal Customers": "🌟 **Upsell & Cross-Sell:** Recommend higher-tier bundles, invite to loyalty points tier, solicit product feedback and reviews.",
+                    "Potential Loyalists": "🚀 **Nurture Engagement:** Offer multi-buy discounts, category recommendations, and welcome-back series to increase purchase frequency.",
+                    "Promising": "🌱 **Encourage Habit:** Trial discounts on complementary items, personalized onboarding, and timely re-order reminders.",
+                    "At Risk": "⚠️ **Urgent Win-Back:** Send personalized reconnect offers, surveys to diagnose dissatisfaction, and aggressive limited-time renewal coupons.",
+                    "Need Attention": "🔔 **Re-Ignite Interest:** Highlight trending products, seasonal gift guides, and limited-time promotional bundles.",
+                    "About To Sleep": "💤 **Reactivate:** Low-cost automated email campaigns with steep clearance discounts before they drift into Lost.",
+                    "Hibernating": "❄️ **Cold Recovery:** Rebuild brand relevance with high-impact promotions; suppress from costly offline mailings.",
+                    "Lost": "🛑 **Sunset or Archive:** Attempt a final clearance win-back blast, otherwise exclude from ad retargeting spend to preserve marketing budget.",
+                    "Standard": "📦 **Standard Engagement:** Standard newsletters and seasonal catalog mailings.",
+                }
+
+                st.info(STRATEGIES.get(selected_segment, "Standard automated engagement."))
+
+                filtered_custs = rfm_data[rfm_data["rfm_segment"] == selected_segment].copy()
+                st.markdown(f"**Showing `{len(filtered_custs):,}` customers in `{selected_segment}`:**")
+
+                display_drill = filtered_custs[[
+                    "customer_id",
+                    "primary_country",
+                    "recency_days",
+                    "frequency",
+                    "monetary",
+                    "average_order_value",
+                    "rfm_score",
+                ]].copy()
+                display_drill.columns = [
+                    "Customer ID",
+                    "Country",
+                    "Recency (Days)",
+                    "Orders",
+                    "Net Spend (£)",
+                    "AOV (£)",
+                    "RFM Score",
+                ]
+
+                st.dataframe(
+                    display_drill.sort_values(by="Net Spend (£)", ascending=False).style.format({
+                        "Customer ID": "{:.0f}",
+                        "Recency (Days)": "{:.0f}",
+                        "Orders": "{:,.0f}",
+                        "Net Spend (£)": "£{:,.2f}",
+                        "AOV (£)": "£{:,.2f}",
+                    }),
+                    use_container_width=True,
+                    height=350,
+                )
+
             else:
                 st.info("No RFM data available.")
 

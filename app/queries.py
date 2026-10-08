@@ -691,3 +691,67 @@ def compute_customer_distributions(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.D
     return freq_df, mon_df
 
 
+def summarize_rfm_segments(df: pd.DataFrame) -> pd.DataFrame:
+    """Produce comprehensive segment-level profile and revenue contribution matrix.
+
+    Returns DataFrame sorted by Total Revenue descending.
+    """
+    if df.empty or "rfm_segment" not in df.columns:
+        return pd.DataFrame(
+            columns=[
+                "Segment",
+                "Customer Count",
+                "Customer Share (%)",
+                "Total Revenue (£)",
+                "Revenue Share (%)",
+                "Avg Spend (£)",
+                "Avg Recency (Days)",
+                "Avg Frequency",
+            ]
+        )
+
+    total_customers = len(df)
+    total_revenue = float(df["monetary"].sum())
+
+    summary = (
+        df.groupby("rfm_segment", as_index=False)
+        .agg(
+            customer_count=("customer_id", "count"),
+            total_revenue=("monetary", "sum"),
+            avg_spend=("monetary", "mean"),
+            avg_recency=("recency_days", "mean"),
+            avg_frequency=("frequency", "mean"),
+        )
+        .rename(columns={"rfm_segment": "Segment"})
+    )
+
+    summary["Customer Share (%)"] = (summary["customer_count"] / total_customers * 100.0).round(2)
+    summary["Revenue Share (%)"] = (
+        (summary["total_revenue"] / total_revenue * 100.0).round(2)
+        if total_revenue > 0
+        else 0.0
+    )
+    summary["Total Revenue (£)"] = summary["total_revenue"].round(2)
+    summary["Avg Spend (£)"] = summary["avg_spend"].round(2)
+    summary["Avg Recency (Days)"] = summary["avg_recency"].round(1)
+    summary["Avg Frequency"] = summary["avg_frequency"].round(1)
+
+    summary = summary.drop(columns=["total_revenue", "avg_spend", "avg_recency", "avg_frequency"])
+    summary = summary.rename(columns={"customer_count": "Customer Count"})
+    summary = summary.sort_values(by="Total Revenue (£)", ascending=False).reset_index(drop=True)
+
+    # Reorder columns logically
+    cols = [
+        "Segment",
+        "Customer Count",
+        "Customer Share (%)",
+        "Total Revenue (£)",
+        "Revenue Share (%)",
+        "Avg Spend (£)",
+        "Avg Recency (Days)",
+        "Avg Frequency",
+    ]
+    return summary[cols]
+
+
+
