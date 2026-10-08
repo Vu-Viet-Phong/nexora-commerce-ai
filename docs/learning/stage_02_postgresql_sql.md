@@ -11,7 +11,8 @@ AI:
 - `invoice_lines`
 
 The source is `data/processed/transactions_clean.parquet`. The processed
-source is read-only. Static schema and source reconciliation tests run locally.
+source is read-only. Static schema, loader and source reconciliation tests run
+locally.
 Live PostgreSQL verification uses the native PostgreSQL 16 service on Windows;
 Docker is intentionally out of scope for this milestone.
 
@@ -174,9 +175,9 @@ The current Parquet ground truth also gives 19,700,954.46 for rows flagged
 must be reconciled explicitly during loader work rather than silently copied
 from documentation.
 
-Database-level reconciliation is pending until a loader inserts rows into a
-dedicated PostgreSQL test database. No database row count or revenue total is
-claimed yet.
+The loader now performs database-level reconciliation in the dedicated test
+database. Full Parquet loading is intentionally a Milestone 2.3 operation;
+analytics marts and downstream reconciliation remain out of scope.
 
 ## Technical decisions and errors found
 
@@ -196,6 +197,56 @@ claimed yet.
   without logging it; future `.env` values should percent-encode special
   characters.
 
+## Milestone 2.3 loader
+
+The loader is implemented in
+[`src/data/load.py`](../../src/data/load.py). It follows an ETL shape: read
+the immutable processed Parquet, transform it into the four approved grains,
+then load PostgreSQL. The database is the system of record after the load,
+which makes the execution an ELT-compatible boundary for later SQL marts.
+
+The main functions are deliberately small:
+
+- `load_local_env()` reads only the ignored local `.env` and never overwrites
+  process variables.
+- `normalize_database_url()` protects SQLAlchemy parsing when a local
+  password contains an unescaped `@`; percent-encoding in `.env` is preferred.
+- `prepare_frames()` creates customer, product, invoice and line frames,
+  including the deterministic source row key and all 15 quality flags.
+- `copy_frame()` uses PostgreSQL `COPY FROM STDIN` for bulk loading.
+- `load_source()` deletes only the `UCI` namespace from each table, inserts
+  parent tables before facts inside one SQLAlchemy transaction, and lets any
+  exception roll the whole transaction back.
+
+The delete-and-reload strategy is idempotent without using
+`TRUNCATE ... CASCADE`: it cannot remove another source namespace and can be
+used only against the configured loader database. A second run produced the
+same `(customers, products, invoices, invoice_lines)` counts:
+`(5,942, 5,131, 53,628, 1,044,848)`.
+
+The loader preserves 235,287 NULL customer IDs, 19,165 cancellations, 3,393
+inventory adjustments, 6 bad-debt adjustments and the source sheet/row
+lineage. PostgreSQL generates `line_total` from the two-decimal NUMERIC
+`unit_price`; therefore SQL totals use the database's exact rounded metric.
+The valid-sale total in PostgreSQL is **19,700,954.44**, while the Parquet
+float aggregate is **19,700,954.46** before conversion to the schema's
+two-decimal unit-price contract. The return total is **-719,692.94** in both
+contracts.
+
+The integration test intentionally raises an exception after bulk copy. The
+transaction is rolled back and the prior complete counts remain unchanged.
+This demonstrates atomicity and rollback rather than merely testing a nested
+savepoint.
+
+Run the complete loader again with:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.data.load
+```
+
+The command reads `DATABASE_URL` from the process or ignored `.env`, prints
+only row counts and database name, and never prints credentials.
+
 ## Reproducible commands and outcome
 
 ```powershell
@@ -209,7 +260,12 @@ Observed results:
 - `.env` matched `.gitignore` and was never staged.
 - PostgreSQL test connection succeeded through SQLAlchemy/psycopg.
 - Schema apply and runtime integration test: **1 passed**.
-- Full suite: **20 passed in 2.60s**.
+- Full suite before loader: **20 passed in 2.60s**.
+- Loader integration: **1 passed in 606.08s**; the run covered bulk load,
+  reconciliation, idempotent reload and rollback.
+- Full suite after loader: **21 passed in 621.09s**.
+- Main database loader run: **188.25s**, returning 5,942 customers, 5,131
+  products, 53,628 invoices and 1,044,848 invoice lines.
 - The main database safety check confirmed `nexora_commerce`, zero existing
   target tables and no rows to overwrite. The schema was then applied and
   verified as four created tables. No destructive statement was run against

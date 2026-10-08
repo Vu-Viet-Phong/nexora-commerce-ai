@@ -722,4 +722,43 @@ statement tiếp theo, nếu không sẽ báo `InFailedSqlTransaction`.
 Database chính được kiểm tra read-only trước DDL: đúng `nexora_commerce` và
 không có target tables. Sau đó schema được apply thành công với 4 tables;
 không drop hoặc ghi đè dữ liệu hiện có. Full suite kết thúc **20 passed**.
-Milestone 2.3 chưa bắt đầu và vẫn chờ nghiệm thu.
+Milestone 2.2 đã được review document xác nhận approved; Milestone 2.3 bắt
+đầu sau checkpoint commit `36762ec`.
+
+### Milestone 2.3 — PostgreSQL Data Loader
+
+Loader trong `src/data/load.py` đọc Parquet immutable, chuẩn bị bốn grain
+được phê duyệt, rồi bulk load bằng PostgreSQL `COPY FROM STDIN`. ETL tách rõ
+extract/transform/load; database transaction cung cấp ACID, atomic commit và
+rollback khi bất kỳ bước nào lỗi.
+
+Idempotency dùng delete-and-reload có scope `source_system = 'UCI'`, không
+dùng `TRUNCATE CASCADE`, nên không xóa namespace nguồn khác. Parent tables
+được nạp trước fact table để giữ referential integrity. `source_sheet`,
+`source_row_number`, `source_line_key` và SHA-256 giữ lineage; NULL customer,
+cancellation, return, inventory adjustment, bad debt và special StockCode
+được giữ nguyên.
+
+Kết quả test thực tế trên `nexora_commerce_test`:
+
+- customers: 5,942
+- products: 5,131
+- invoices: 53,628
+- invoice_lines: 1,044,848
+- NULL customer IDs: 235,287
+- valid-sale SQL total theo NUMERIC schema: 19,700,954.44
+- physical-return SQL total: -719,692.94
+- loader integration: **1 passed in 606.08s**
+- full suite trước loader: **20 passed**
+- full suite sau loader: **21 passed in 621.09s**
+- main database loader: **188.25s**
+
+Chạy loader lần hai cho cùng kết quả counts, không nhân đôi. Test lỗi cố ý
+sau COPY cũng rollback toàn bộ và giữ lại state hoàn chỉnh trước đó. Chênh
+0.02 giữa valid-sale Parquet float aggregate (19,700,954.46) và SQL
+19,700,954.44 là do schema bắt buộc `unit_price NUMERIC(12,2)` và generated
+`line_total` làm tròn phép nhân ở database; đây là khác biệt contract được
+ghi rõ, không phải mất dòng.
+
+Milestone 2.4 chưa bắt đầu; loader milestone dừng tại đây để Antigravity
+review.
