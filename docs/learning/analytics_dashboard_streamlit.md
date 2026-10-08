@@ -324,11 +324,13 @@ tests/test_dashboard.py::test_resample_sales_trend_empty PASSED
 tests/test_dashboard.py::test_get_customer_kpis PASSED
 tests/test_dashboard.py::test_get_customer_daily_trend PASSED
 tests/test_dashboard.py::test_get_top_customers PASSED
+tests/test_dashboard.py::test_compute_customer_distributions PASSED
+tests/test_dashboard.py::test_compute_customer_distributions_empty PASSED
 tests/test_dashboard.py::test_compute_rfm_segments_empty_dataframe PASSED
 tests/test_dashboard.py::test_compute_rfm_segments_handles_null_recency_and_assigns_segments PASSED
 tests/test_dashboard.py::test_missing_table_raises_database_query_error PASSED
 
-============================= 19 passed in 1.50s ==============================
+============================= 21 passed in 1.18s ==============================
 ```
 
 ---
@@ -336,12 +338,16 @@ tests/test_dashboard.py::test_missing_table_raises_database_query_error PASSED
 ## 15. Lịch Sử Git Commits Theo Checkpoint
 
 - **Checkpoint A (`3337dfc`):** Khởi tạo kiến trúc Dashboard & Query Layer, cấu hình Streamlit dependency, xử lý kết nối DB an toàn và xây dựng bộ kiểm thử in-memory.
-- **Checkpoint B:** Hoàn thiện Sales Overview Section:
+- **Checkpoint B (`de9942c`):** Hoàn thiện Sales Overview Section:
   - 5 KPI metric cards với chỉ số hoàn hàng và realization rate.
   - Bộ điều khiển độ phân giải thời gian (Daily, Weekly, Monthly) với line chart, bar chart và cumulative revenue area chart.
   - Phân tích thị trường quốc tế với tỉ trọng thị phần (Market Share %) và bảng chi tiết doanh thu theo quốc gia.
   - Thẻ thông tin kiểm soát dữ liệu và phân loại hàng hóa vật lý (Physical Merchandise).
-- **Checkpoint C:** (Kế tiếp) Hoàn thiện Customer Analytics Section.
+- **Checkpoint C:** Hoàn thiện Customer Analytics Section:
+  - 5 KPI cards mở rộng: Tổng khách hàng (5,942), Tỷ lệ khách mua lại (Repeat Rate: 71.3%), Tổng chi tiêu trọn đời (£16.41M), AOV (£386.11), Vòng đời trung bình (474.5 ngày).
+  - Phân bố tần suất mua hàng (One-Time, Occasional, Frequent, VIP Power Buyers) và các phân khúc ngân sách chi tiêu.
+  - Biểu đồ chuỗi thời gian người mua hoạt động hàng ngày (Active Buyers) và chi tiêu hàng ngày từ `mart_customer_daily`.
+  - Bảng xếp hạng Top 15 khách hàng VIP có giá trị chi tiêu cao nhất kèm thông tin quốc gia, số đơn, AOV và ngày mua cuối.
 - **Checkpoint D:** (Kế tiếp) Hoàn thiện RFM Analytics Section.
 - **Checkpoint E:** (Kế tiếp) Hoàn thiện toàn diện, kiểm tra an ninh và kiểm thử hồi quy.
 

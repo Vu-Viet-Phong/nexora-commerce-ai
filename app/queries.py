@@ -364,6 +364,8 @@ def get_customer_kpis(
         f"""
         SELECT
             COUNT(*) AS total_customers,
+            COUNT(CASE WHEN frequency >= 2 THEN 1 END) AS repeat_customers,
+            COUNT(CASE WHEN frequency = 1 THEN 1 END) AS one_time_buyers,
             COALESCE(SUM(monetary), 0) AS total_customer_spend,
             COALESCE(AVG(frequency), 0) AS avg_frequency,
             COALESCE(AVG(average_order_value), 0) AS avg_aov,
@@ -379,14 +381,24 @@ def get_customer_kpis(
             if not row:
                 return {
                     "total_customers": 0,
+                    "repeat_customers": 0,
+                    "repeat_rate_pct": 0.0,
+                    "one_time_buyers": 0,
                     "total_customer_spend": 0.0,
                     "avg_frequency": 0.0,
                     "avg_aov": 0.0,
                     "avg_recency_days": 0.0,
                     "avg_tenure_days": 0.0,
                 }
+            total_cust = int(row["total_customers"])
+            rep_cust = int(row["repeat_customers"])
+            rep_rate = round(rep_cust / total_cust * 100.0, 2) if total_cust > 0 else 0.0
+
             return {
-                "total_customers": int(row["total_customers"]),
+                "total_customers": total_cust,
+                "repeat_customers": rep_cust,
+                "repeat_rate_pct": rep_rate,
+                "one_time_buyers": int(row["one_time_buyers"]),
                 "total_customer_spend": float(row["total_customer_spend"]),
                 "avg_frequency": float(row["avg_frequency"]),
                 "avg_aov": float(row["avg_aov"]),
@@ -631,4 +643,51 @@ def calculate_country_shares(df: pd.DataFrame, total_net_sales: float | None = N
     else:
         result["market_share_pct"] = 0.0
     return result
+
+
+def compute_customer_distributions(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Calculate frequency tier breakdown and monetary spending brackets from snapshot DataFrame.
+
+    Returns:
+    - freq_distribution: DataFrame with columns ['Tier', 'Customer Count', 'Percentage']
+    - mon_distribution: DataFrame with columns ['Bracket', 'Customer Count', 'Percentage']
+    """
+    if df.empty:
+        empty_freq = pd.DataFrame(columns=["Tier", "Customer Count", "Percentage"])
+        empty_mon = pd.DataFrame(columns=["Bracket", "Customer Count", "Percentage"])
+        return empty_freq, empty_mon
+
+    total = len(df)
+
+    # 1. Frequency Tiers
+    freq_bins = [-1, 0, 1, 4, 9, 1000000]
+    freq_labels = [
+        "0 Orders (Refunds Only)",
+        "1 Order (One-Time)",
+        "2-4 Orders (Occasional)",
+        "5-9 Orders (Frequent)",
+        "10+ Orders (VIP Power Buyers)",
+    ]
+    freq_series = pd.cut(df["frequency"].fillna(0), bins=freq_bins, labels=freq_labels)
+    freq_df = freq_series.value_counts(sort=False).reset_index()
+    freq_df.columns = ["Tier", "Customer Count"]
+    freq_df["Percentage"] = (freq_df["Customer Count"] / total * 100.0).round(2)
+
+    # 2. Monetary Brackets
+    mon_bins = [-1e12, 0, 500, 2000, 5000, 20000, 1e12]
+    mon_labels = [
+        "<= £0 (Net Negative)",
+        "< £500 (Low Spend)",
+        "£500 - £2,000 (Medium)",
+        "£2,000 - £5,000 (High)",
+        "£5,000 - £20,000 (Premium)",
+        "£20,000+ (Enterprise VIP)",
+    ]
+    mon_series = pd.cut(df["monetary"].fillna(0), bins=mon_bins, labels=mon_labels)
+    mon_df = mon_series.value_counts(sort=False).reset_index()
+    mon_df.columns = ["Bracket", "Customer Count"]
+    mon_df["Percentage"] = (mon_df["Customer Count"] / total * 100.0).round(2)
+
+    return freq_df, mon_df
+
 

@@ -18,6 +18,7 @@ from sqlalchemy import create_engine, text
 from app.queries import (
     DatabaseQueryError,
     calculate_country_shares,
+    compute_customer_distributions,
     compute_rfm_segments,
     get_available_countries,
     get_customer_daily_trend,
@@ -261,6 +262,9 @@ def test_resample_sales_trend_empty():
 def test_get_customer_kpis(sqlite_engine):
     cust_kpis = get_customer_kpis(sqlite_engine)
     assert cust_kpis["total_customers"] == 4
+    assert cust_kpis["repeat_customers"] == 2
+    assert cust_kpis["repeat_rate_pct"] == 50.0
+    assert cust_kpis["one_time_buyers"] == 1
     assert cust_kpis["total_customer_spend"] == 1950.0
 
 
@@ -275,6 +279,23 @@ def test_get_top_customers(sqlite_engine):
     assert len(top) == 2
     assert top.iloc[0]["customer_id"] == 1001
     assert top.iloc[0]["monetary"] == 1200.0
+
+
+def test_compute_customer_distributions(sqlite_engine):
+    snapshot = get_rfm_snapshot(sqlite_engine)
+    freq_tiers, mon_brackets = compute_customer_distributions(snapshot)
+    assert len(freq_tiers) == 5
+    assert len(mon_brackets) == 6
+    assert freq_tiers["Customer Count"].sum() == 4
+    assert mon_brackets["Customer Count"].sum() == 4
+    assert freq_tiers["Percentage"].sum() == pytest.approx(100.0, abs=0.1)
+
+
+def test_compute_customer_distributions_empty():
+    empty_df = pd.DataFrame(columns=["frequency", "monetary"])
+    f_df, m_df = compute_customer_distributions(empty_df)
+    assert f_df.empty
+    assert m_df.empty
 
 
 # ============================================================================

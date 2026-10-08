@@ -17,6 +17,7 @@ import streamlit as st
 from app.queries import (
     DatabaseQueryError,
     calculate_country_shares,
+    compute_customer_distributions,
     compute_rfm_segments,
     get_available_countries,
     get_customer_daily_trend,
@@ -131,11 +132,13 @@ def fetch_sales_data(_engine, start_date, end_date, country):
 
 @st.cache_data(ttl=300)
 def fetch_customer_data(_engine, start_date, end_date, country):
-    """Retrieve customer KPIs, daily active spend trend, and top customers."""
+    """Retrieve customer KPIs, daily active spend trend, top customers, and distribution tiers."""
     kpis = get_customer_kpis(_engine, country=country)
     trend = get_customer_daily_trend(_engine, start_date=start_date, end_date=end_date)
     top_cust = get_top_customers(_engine, country=country, limit=15)
-    return kpis, trend, top_cust
+    snapshot = get_rfm_snapshot(_engine, country=country)
+    freq_tiers, mon_brackets = compute_customer_distributions(snapshot)
+    return kpis, trend, top_cust, freq_tiers, mon_brackets
 
 
 @st.cache_data(ttl=300)
@@ -380,29 +383,141 @@ def main():
             st.error(f"Query error in Sales Overview: {err}")
 
     # ========================================================================
-    # TAB 2: CUSTOMER ANALYTICS (Skeleton preview for Checkpoint A)
+    # TAB 2: CUSTOMER ANALYTICS (Checkpoint C Implementation)
     # ========================================================================
     with tab_customers:
         try:
-            cust_kpis, cust_trend, top_cust = fetch_customer_data(
+            cust_kpis, cust_trend, top_cust, freq_tiers, mon_brackets = fetch_customer_data(
                 engine, start_date=start_date, end_date=end_date, country=country_choice
             )
-            col1, col2, col3, col4 = st.columns(4)
+
+            # 1. Executive Customer Metrics Row
+            st.markdown("### 👥 Key Customer & Retention Metrics")
+            col1, col2, col3, col4, col5 = st.columns(5)
             with col1:
-                st.metric("Identified Customers", f"{cust_kpis['total_customers']:,}")
+                st.metric(
+                    label="Identified Customers",
+                    value=f"{cust_kpis['total_customers']:,}",
+                    help="Count of unique identified customers registered in mart_customer_snapshot.",
+                )
+                st.caption(f"One-time buyers: {cust_kpis.get('one_time_buyers', 0):,}")
             with col2:
-                st.metric("Total Customer Spend", f"£{cust_kpis['total_customer_spend']:,.2f}")
+                st.metric(
+                    label="Repeat Customer Rate",
+                    value=f"{cust_kpis.get('repeat_rate_pct', 0.0):.1f}%",
+                    delta=f"{cust_kpis.get('repeat_customers', 0):,} repeat buyers",
+                    delta_color="normal",
+                    help="Percentage of customers with 2 or more lifetime purchases.",
+                )
+                st.caption(f"{cust_kpis.get('repeat_customers', 0):,} / {cust_kpis['total_customers']:,} accounts")
             with col3:
-                st.metric("Avg Frequency", f"{cust_kpis['avg_frequency']:.1f} orders")
+                st.metric(
+                    label="Lifetime Spend",
+                    value=f"£{cust_kpis['total_customer_spend']:,.2f}",
+                    help="Total aggregated net monetary spend across all identified customers.",
+                )
+                avg_cust_val = (cust_kpis['total_customer_spend'] / cust_kpis['total_customers']) if cust_kpis['total_customers'] > 0 else 0.0
+                st.caption(f"Avg LTV: £{avg_cust_val:,.2f}")
             with col4:
-                st.metric("Avg Customer AOV", f"£{cust_kpis['avg_aov']:,.2f}")
+                st.metric(
+                    label="Avg Order Value (AOV)",
+                    value=f"£{cust_kpis['avg_aov']:,.2f}",
+                    help="Mean average order value per identified customer.",
+                )
+                st.caption(f"Avg frequency: {cust_kpis['avg_frequency']:.1f} orders")
+            with col5:
+                st.metric(
+                    label="Avg Tenure & Recency",
+                    value=f"{cust_kpis['avg_tenure_days']:.0f} days",
+                    help="Average days between customer's first purchase and reference snapshot date (2011-12-10).",
+                )
+                st.caption(f"Avg recency: {cust_kpis['avg_recency_days']:.0f} days")
 
             st.divider()
-            st.subheader("Daily Active Customer Purchasing Trend")
-            if not cust_trend.empty:
-                st.line_chart(cust_trend.set_index("calendar_day")["active_customers"])
+
+            # 2. Customer Segmentation Tiers & Spending Brackets
+            st.markdown("### 📊 Order Frequency & Spending Distribution")
+            col_freq_dist, col_mon_dist = st.columns(2)
+
+            with col_freq_dist:
+                st.subheader("Purchase Frequency Tiers")
+                if not freq_tiers.empty:
+                    st.bar_chart(freq_tiers.set_index("Tier")["Customer Count"], color="#1E88E5")
+                    st.dataframe(
+                        freq_tiers.style.format({
+                            "Customer Count": "{:,.0f}",
+                            "Percentage": "{:.2f}%",
+                        }),
+                        use_container_width=True,
+                    )
+                else:
+                    st.info("No frequency data available.")
+
+            with col_mon_dist:
+                st.subheader("Monetary Spending Brackets")
+                if not mon_brackets.empty:
+                    st.bar_chart(mon_brackets.set_index("Bracket")["Customer Count"], color="#43A047")
+                    st.dataframe(
+                        mon_brackets.style.format({
+                            "Customer Count": "{:,.0f}",
+                            "Percentage": "{:.2f}%",
+                        }),
+                        use_container_width=True,
+                    )
+                else:
+                    st.info("No spending brackets data available.")
+
+            st.divider()
+
+            # 3. Daily Active Customers & Purchasing Activity
+            st.markdown("### 📅 Daily Customer Purchasing Dynamics")
+            col_daily_left, col_daily_right = st.columns(2)
+
+            with col_daily_left:
+                st.subheader("Daily Active Buyers")
+                if not cust_trend.empty:
+                    st.line_chart(cust_trend.set_index("calendar_day")["active_customers"], color="#1E88E5")
+                else:
+                    st.info("No active purchasing activity found.")
+
+            with col_daily_right:
+                st.subheader("Daily Customer Net Spend (£)")
+                if not cust_trend.empty:
+                    st.line_chart(cust_trend.set_index("calendar_day")["daily_net_spend"], color="#43A047")
+                else:
+                    st.info("No daily spend records found.")
+
+            st.divider()
+
+            # 4. Top VIP Customers Table
+            st.markdown("### 🏆 Top 15 VIP Customers by Monetary Value")
+            if not top_cust.empty:
+                display_top = top_cust.copy()
+                display_top.columns = [
+                    "Customer ID",
+                    "Country",
+                    "Net Spend (£)",
+                    "Orders",
+                    "AOV (£)",
+                    "Recency (Days)",
+                    "Tenure (Days)",
+                    "First Purchase",
+                    "Last Purchase",
+                ]
+                st.dataframe(
+                    display_top.style.format({
+                        "Customer ID": "{:.0f}",
+                        "Net Spend (£)": "£{:,.2f}",
+                        "Orders": "{:,.0f}",
+                        "AOV (£)": "£{:,.2f}",
+                        "Recency (Days)": "{:.0f}",
+                        "Tenure (Days)": "{:.0f}",
+                    }),
+                    use_container_width=True,
+                    height=450,
+                )
             else:
-                st.info("No active purchasing activity found.")
+                st.info("No VIP customer records available.")
 
         except DatabaseQueryError as err:
             st.error(f"Query error in Customer Analytics: {err}")
