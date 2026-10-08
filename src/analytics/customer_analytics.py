@@ -190,6 +190,12 @@ def validate_customer_features(frame: pd.DataFrame) -> None:
         raise ValueError("customer_id must be unique")
     if frame["customer_id"].isna().any():
         raise ValueError("customer_id must not be NULL in customer features")
+        
+    if not frame.empty and frame["frequency"].isna().all():
+        raise ValueError("frequency cannot be entirely NULL")
+    if not frame.empty and frame["monetary"].isna().all():
+        raise ValueError("monetary cannot be entirely NULL")
+
     numeric_columns = (
         "recency_days",
         "frequency",
@@ -199,20 +205,26 @@ def validate_customer_features(frame: pd.DataFrame) -> None:
     )
     for column in numeric_columns:
         values = pd.to_numeric(frame[column], errors="coerce")
-        if values.notna().any() and values.isna().ne(frame[column].isna()).any():
+        if frame[column].notna().any() and (values.isna() & frame[column].notna()).any():
             raise ValueError(f"{column} contains non-numeric values")
-        if values.notna().any() and not np.isfinite(values.dropna()).all():
+        if np.isinf(values.astype(float)).any():
             raise ValueError(f"{column} contains non-finite values")
-    if (pd.to_numeric(frame["frequency"], errors="coerce").dropna() < 0).any():
+
+    freq = pd.to_numeric(frame["frequency"], errors="coerce")
+    rec = pd.to_numeric(frame["recency_days"], errors="coerce")
+    tenure = pd.to_numeric(frame["tenure_days"], errors="coerce")
+
+    if (freq < 0).any():
         raise ValueError("frequency must be non-negative")
-    if (
-        pd.to_numeric(frame["recency_days"], errors="coerce").dropna() < 0
-    ).any():
+    if (rec < 0).any():
         raise ValueError("recency_days must be non-negative")
-    if (
-        pd.to_numeric(frame["tenure_days"], errors="coerce").dropna() < 0
-    ).any():
+    if (tenure < 0).any():
         raise ValueError("tenure_days must be non-negative")
+        
+    if ((freq > 0) & rec.isna()).any():
+        raise ValueError("recency_days must not be NULL when frequency > 0")
+    if ((freq == 0) & rec.notna()).any():
+        raise ValueError("recency_days must be NULL when frequency == 0")
 
 
 def fetch_customer_features(

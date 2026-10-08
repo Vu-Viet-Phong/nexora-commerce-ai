@@ -68,3 +68,41 @@ def test_feature_query_is_bounded_and_reproducible() -> None:
     assert "mart_customer_daily" in query
     assert "calendar_day <= CAST(:as_of_date AS DATE)" in query
     assert "customer_id IS NOT NULL" not in query
+
+
+def test_feature_validation_rejects_all_null_frequency() -> None:
+    import numpy as np
+    frame = feature_frame()
+    frame["frequency"] = np.nan
+    with pytest.raises(ValueError, match="entirely NULL"):
+        validate_customer_features(frame)
+
+
+def test_feature_validation_rejects_invalid_strings() -> None:
+    frame = feature_frame()
+    frame.loc[0, "frequency"] = "abc"
+    with pytest.raises(ValueError, match="non-numeric"):
+        validate_customer_features(frame)
+
+
+def test_feature_validation_rejects_infinity() -> None:
+    import numpy as np
+    frame = feature_frame()
+    frame.loc[0, "monetary"] = np.inf
+    with pytest.raises(ValueError, match="non-finite"):
+        validate_customer_features(frame)
+
+
+def test_feature_validation_rejects_missing_recency_for_active() -> None:
+    import numpy as np
+    frame = feature_frame()
+    frame.loc[0, "recency_days"] = np.nan
+    with pytest.raises(ValueError, match="must not be NULL when frequency > 0"):
+        validate_customer_features(frame)
+
+
+def test_feature_validation_rejects_recency_for_inactive() -> None:
+    frame = feature_frame()
+    frame.loc[1, "recency_days"] = 10  # freq is 0 here
+    with pytest.raises(ValueError, match="must be NULL when frequency == 0"):
+        validate_customer_features(frame)
