@@ -310,3 +310,22 @@ Không commit customer assignments, model pickle hoặc dataset lớn.
 6. Vì sao accuracy không phù hợp khi chưa có ground truth segment?
 7. Tại sao inactive customer giữ recency NULL ở source nhưng được impute khi fit?
 8. Làm thế nào kiểm tra cluster stability khi label permutation xảy ra?
+
+## 15. Fixes từ Customer Analytics Review
+
+Các điểm cải tiến và sửa lỗi trong logic phân cụm và scoring:
+
+### 15.1 K-Means Profiling và Imputation
+- **Lỗi gốc:** Việc gán (impute) recency bị khuyết (NULL) thành `max + 1` được ghi đè trực tiếp lên Dataframe chứa dữ liệu gốc `source["recency_days"]`. Khi đưa Dataframe này vào `profile_clusters()`, hàm tính toán ra `average_recency` sai vì trung bình bao gồm cả các giá trị độ trễ nhân tạo khổng lồ, làm mất tính thực tế.
+- **Code sửa:** Giao diện hàm `prepare_rfm_features` và `fit_kmeans` được cấu trúc lại để **không gán** trên biến `result["recency_days"]`. Phép toán impute chỉ thực hiện trên mảng chuẩn bị cho `StandardScaler` và `KMeans`. Bản gốc (`source`) trả về vẫn giữ đúng nguyên vẹn giá trị `NaN` cho các inactive customer. Điều này giúp `profile_clusters` thống kê chính xác dựa trên Recency thật.
+- **Bài học rút ra:** Không bao giờ rò rỉ dữ liệu transformation/imputation (dành cho mô hình) ngược lại vào các báo cáo raw descriptives hoặc profile. Sự trong sạch của dữ liệu gốc phải được duy trì từ đầu đến cuối.
+
+### 15.2 RFM Quantile Ties (Trường hợp bằng điểm)
+- **Lỗi gốc:** Lệnh `values.rank(method="first")` tạo thứ hạng theo vị trí ban đầu trong DataFrame, dẫn đến 2 customer có R/F/M hoàn toàn bằng nhau lại có thể bị đẩy vào hai quantile khác nhau và nhận điểm (score) khác nhau một cách thiếu công bằng.
+- **Code sửa:** Vẫn dùng `rank(method="first")` để chia 5 quantile đều nhau thông qua `qcut()`, sau đó dùng `.groupby(values).transform("median").round()` để ép các customer có cùng R/F/M nhận một score duy nhất (điểm trung vị làm tròn của nhóm đó). Điều này đảm bảo tính "permutation-invariant": Dù xáo trộn thứ tự dòng dữ liệu, score cho cùng giá trị R/F/M luôn giống hệt nhau.
+- **Bài học rút ra:** Binning/Quantile với lượng lớn ties (ví dụ rất nhiều người có frequency = 1) là một vấn đề nhức nhối trong RFM. Cần đảm bảo hệ thống chấm điểm phải giải thích được và đối xử công bằng (deterministic) đối với các hành vi giống nhau.
+
+### 15.3 Customer Coverage Error
+- **Lỗi gốc:** Hàm `compare_segments_and_clusters` dùng phép `inner join` nhưng thiếu kiểm tra ràng buộc. Nếu 2 thuật toán bỏ sót customer hoặc sinh trùng lặp (duplicate IDs), lệnh join vẫn chạy êm ái mà không báo lỗi (silently drop).
+- **Code sửa:** Thêm bước validation bắt buộc sử dụng tập hợp `set(segmented["customer_id"])` và `set(assignments["customer_id"])`. So sánh nếu có sự khác biệt về số lượng, code sẽ văng `ValueError` báo cáo chính xác khách hàng nào bị thiếu. Ngoài ra reject ngay lập tức nếu xuất hiện trùng lặp.
+- **Bài học rút ra:** Luôn chặn chặn đứng nguy cơ mất mát dữ liệu ẩn (silent data drop) ở các giao điểm của các pipeline.

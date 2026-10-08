@@ -209,3 +209,21 @@ loader không cần chạy lại vì feature query reuse mart đã được nghi
 - Metric contract cho return rate, product diversity và spending volatility.
 - Sparse matrix representation cho recommendation system.
 - Privacy controls khi xuất customer-level ML dataset.
+
+## 10. Fixes từ Customer Analytics Review
+
+Trong quá trình review, các lỗi rò rỉ dữ liệu (leakage) và lỗ hổng validation đã được sửa chữa:
+
+### 10.1 Feature Validation
+- **Lỗi gốc:** Validation cũ không báo lỗi nếu toàn bộ cột `frequency` hoặc `monetary` là NULL (chỉ check NaN lẫn lộn string). Nó cũng bỏ sót chuỗi text (vì convert `pd.to_numeric` với `coerce` trả về NaN cho toàn cột, làm check `values.notna().any()` bị False). Ngoài ra, không kiểm tra logic kinh doanh chặt chẽ giữa `recency` và `frequency`.
+- **Code sửa:** 
+  - Bắt buộc `frequency` và `monetary` không được toàn NULL.
+  - Sửa điều kiện check invalid strings: so sánh `values.isna()` và `frame[column].notna()`.
+  - Từ chối giá trị `inf` bằng `np.isinf()`.
+  - Thêm logic consistency: Khách hàng active (frequency > 0) bắt buộc phải có `recency_days`. Khách hàng inactive (frequency == 0) bắt buộc `recency_days` phải là NULL.
+- **Bài học rút ra:** Khi dùng `pd.to_numeric(errors="coerce")`, hãy thận trọng vì chuỗi hoàn toàn invalid có thể bị nuốt mất và biến thành NaN toàn bộ. Data contract phải phản ánh chặt chẽ business logic.
+
+### 10.2 Temporal Leakage
+- **Lỗi gốc:** Việc truy vấn `customers AS c` để lấy `primary_country` có thể gây temporal leakage. `primary_country` được tính toán trên toàn bộ vòng đời (lifetime) của khách hàng. Khi backtest ở một `as_of_date` trong quá khứ, thông tin này có thể phản ánh quốc gia mà khách hàng mới chuyển đến trong tương lai, gây rò rỉ thông tin (future leak).
+- **Code sửa:** Ghi rõ limitation vào docstring và thêm runtime warning (cảnh báo) khi `as_of_date` là ngày trong quá khứ so với mốc dữ liệu cuối (`2011-12-10`).
+- **Bài học rút ra:** Việc phân tách giữa Dimension Table (không có point-in-time snapshot) và Fact Table (có bounded date) là rất quan trọng. Khi không thể xử lý triệt để, phải ghi rõ ràng giới hạn (limitation) và cảnh báo người dùng.
