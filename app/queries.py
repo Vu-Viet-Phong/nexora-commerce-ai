@@ -17,7 +17,8 @@ from urllib.parse import quote, unquote
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
 
@@ -80,8 +81,15 @@ def get_engine(database_url: str | None = None, load_env: bool = True) -> Engine
             "Database URL not configured. Please set DATABASE_URL in .env"
         )
     normalized = normalize_db_url(target_url)
-    return create_engine(normalized, pool_pre_ping=True)
-
+    try:
+        engine = create_engine(normalized, pool_pre_ping=True)
+        # Verify connection and read-only access (or just connection)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return engine
+    except Exception:
+        # Hide raw database exceptions and credentials from the user
+        raise DatabaseQueryError("Failed to connect to the database. Please verify credentials and network status.")
 
 # ============================================================================
 # FILTER METADATA QUERIES
@@ -141,7 +149,12 @@ def get_sales_kpis(
     end_date: date | None = None,
     country: str | None = None,
 ) -> dict[str, float]:
-    """Calculate aggregated Sales KPIs directly in PostgreSQL to save memory."""
+    """Calculate aggregated Sales KPIs directly in PostgreSQL to save memory.
+    
+    Note: distinct_invoices is pre-aggregated at the (calendar_day, country, is_physical_merchandise)
+    grain. Summing it across classifications yields 'invoice segments', not unique global invoices,
+    because a single invoice containing both physical and service items is counted in both rows.
+    """
     clauses = ["1=1"]
     params: dict[str, Any] = {}
 
@@ -163,7 +176,7 @@ def get_sales_kpis(
             COALESCE(SUM(valid_sales_revenue), 0) AS valid_sales,
             COALESCE(SUM(return_value), 0) AS return_value,
             COALESCE(SUM(net_sales), 0) AS net_sales,
-            COALESCE(SUM(distinct_invoices), 0) AS total_orders,
+            COALESCE(SUM(distinct_invoices), 0) AS invoice_segments,
             COALESCE(SUM(units_sold), 0) AS units_sold,
             COALESCE(SUM(units_returned), 0) AS units_returned
         FROM mart_daily_sales
@@ -180,20 +193,22 @@ def get_sales_kpis(
                     "valid_sales": 0.0,
                     "return_value": 0.0,
                     "net_sales": 0.0,
-                    "total_orders": 0,
+                    "invoice_segments": 0,
                     "units_sold": 0,
                     "units_returned": 0,
-                    "aov": 0.0,
+                    "net_aov": 0.0,
+                    "gross_aov": 0.0,
                     "return_rate_pct": 0.0,
                 }
             gross = float(row["gross_sales"])
             ret = float(row["return_value"])
             net = float(row["net_sales"])
-            orders = int(row["total_orders"])
+            segments = int(row["invoice_segments"])
             units_s = int(row["units_sold"])
             units_r = int(row["units_returned"])
 
-            aov = round(net / orders, 2) if orders > 0 else 0.0
+            net_aov = round(net / segments, 2) if segments > 0 else 0.0
+            gross_aov = round(gross / segments, 2) if segments > 0 else 0.0
             return_rate = round(abs(ret) / gross * 100.0, 2) if gross > 0 else 0.0
 
             return {
@@ -201,10 +216,11 @@ def get_sales_kpis(
                 "valid_sales": float(row["valid_sales"]),
                 "return_value": ret,
                 "net_sales": net,
-                "total_orders": orders,
+                "invoice_segments": segments,
                 "units_sold": units_s,
                 "units_returned": units_r,
-                "aov": aov,
+                "net_aov": net_aov,
+                "gross_aov": gross_aov,
                 "return_rate_pct": return_rate,
             }
     except SQLAlchemyError as exc:
@@ -239,7 +255,7 @@ def get_daily_sales_trend(
             SUM(gross_sales) AS gross_sales,
             SUM(return_value) AS return_value,
             SUM(net_sales) AS net_sales,
-            SUM(distinct_invoices) AS total_orders,
+            SUM(distinct_invoices) AS invoice_segments,
             SUM(units_sold) AS units_sold,
             SUM(units_returned) AS units_returned
         FROM mart_daily_sales
@@ -250,7 +266,8 @@ def get_daily_sales_trend(
     )
     try:
         with engine.connect() as conn:
-            df = pd.read_sql_query(query, conn, params=params)
+            result = conn.execute(query, params)
+            df = pd.DataFrame(result.fetchall(), columns=result.keys())
             if not df.empty:
                 df["calendar_day"] = pd.to_datetime(df["calendar_day"])
             return df
@@ -262,6 +279,7 @@ def get_sales_by_country(
     engine: Engine,
     start_date: date | None = None,
     end_date: date | None = None,
+    country: str | None = None,
     limit: int = 10,
 ) -> pd.DataFrame:
     """Retrieve top revenue countries within the selected date range."""
@@ -274,6 +292,9 @@ def get_sales_by_country(
     if end_date is not None:
         clauses.append("calendar_day <= :end_date")
         params["end_date"] = end_date
+    if country and country != "All":
+        clauses.append("country = :country")
+        params["country"] = country
 
     where_sql = " AND ".join(clauses)
     query = text(
@@ -283,7 +304,7 @@ def get_sales_by_country(
             SUM(gross_sales) AS gross_sales,
             SUM(return_value) AS return_value,
             SUM(net_sales) AS net_sales,
-            SUM(distinct_invoices) AS total_orders
+            SUM(distinct_invoices) AS invoice_segments
         FROM mart_daily_sales
         WHERE {where_sql}
         GROUP BY country
@@ -293,7 +314,8 @@ def get_sales_by_country(
     )
     try:
         with engine.connect() as conn:
-            return pd.read_sql_query(query, conn, params=params)
+            result = conn.execute(query, params)
+            return pd.DataFrame(result.fetchall(), columns=result.keys())
     except SQLAlchemyError as exc:
         raise DatabaseQueryError(f"Failed to fetch country sales: {exc}") from exc
 
@@ -338,7 +360,8 @@ def get_merchandise_breakdown(
     )
     try:
         with engine.connect() as conn:
-            return pd.read_sql_query(query, conn, params=params)
+            result = conn.execute(query, params)
+            return pd.DataFrame(result.fetchall(), columns=result.keys())
     except SQLAlchemyError as exc:
         raise DatabaseQueryError(f"Failed to fetch merchandise breakdown: {exc}") from exc
 
@@ -442,7 +465,8 @@ def get_customer_daily_trend(
     )
     try:
         with engine.connect() as conn:
-            df = pd.read_sql_query(query, conn, params=params)
+            result = conn.execute(query, params)
+            df = pd.DataFrame(result.fetchall(), columns=result.keys())
             if not df.empty:
                 df["calendar_day"] = pd.to_datetime(df["calendar_day"])
             return df
@@ -484,7 +508,8 @@ def get_top_customers(
     )
     try:
         with engine.connect() as conn:
-            return pd.read_sql_query(query, conn, params=params)
+            result = conn.execute(query, params)
+            return pd.DataFrame(result.fetchall(), columns=result.keys())
     except SQLAlchemyError as exc:
         raise DatabaseQueryError(f"Failed to fetch top customers: {exc}") from exc
 
@@ -522,7 +547,8 @@ def get_rfm_snapshot(
     )
     try:
         with engine.connect() as conn:
-            return pd.read_sql_query(query, conn, params=params)
+            result = conn.execute(query, params)
+            return pd.DataFrame(result.fetchall(), columns=result.keys())
     except SQLAlchemyError as exc:
         raise DatabaseQueryError(f"Failed to fetch RFM snapshot: {exc}") from exc
 
@@ -620,7 +646,7 @@ def resample_sales_trend(df: pd.DataFrame, frequency: str = "Daily") -> pd.DataF
             "gross_sales": "sum",
             "return_value": "sum",
             "net_sales": "sum",
-            "total_orders": "sum",
+            "invoice_segments": "sum",
             "units_sold": "sum",
             "units_returned": "sum",
         })
@@ -630,14 +656,22 @@ def resample_sales_trend(df: pd.DataFrame, frequency: str = "Daily") -> pd.DataF
 
 
 def calculate_country_shares(df: pd.DataFrame, total_net_sales: float | None = None) -> pd.DataFrame:
-    """Calculate market share percentages for top revenue countries."""
+    """Calculate market share percentages for top revenue countries.
+    
+    If total_net_sales is not provided or <= 0, market share is reported as 0.0 to avoid misrepresentation.
+    Denominator must be the total market sales scope, NOT just the top 10 countries, unless explicitly asked.
+    """
     if df.empty:
         result = df.copy()
         result["market_share_pct"] = 0.0
         return result
 
     result = df.copy()
-    denom = total_net_sales if total_net_sales and total_net_sales > 0 else result["net_sales"].sum()
+    
+    # Strictly use the explicitly provided total denominator.
+    # Fallback to df sum only if explicitly needed, but it misrepresents market share if df is truncated.
+    denom = total_net_sales if total_net_sales is not None else result["net_sales"].sum()
+    
     if denom > 0:
         result["market_share_pct"] = (result["net_sales"] / denom * 100.0).round(2)
     else:
@@ -662,7 +696,7 @@ def compute_customer_distributions(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.D
     # 1. Frequency Tiers
     freq_bins = [-1, 0, 1, 4, 9, 1000000]
     freq_labels = [
-        "0 Orders (Refunds Only)",
+        "0 Orders (Registered/No Purchase)",
         "1 Order (One-Time)",
         "2-4 Orders (Occasional)",
         "5-9 Orders (Frequent)",
