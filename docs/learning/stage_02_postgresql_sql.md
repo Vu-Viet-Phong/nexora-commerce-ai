@@ -270,3 +270,121 @@ Observed results:
   target tables and no rows to overwrite. The schema was then applied and
   verified as four created tables. No destructive statement was run against
   existing main data.
+
+## Milestone 2.4: SQL analytics marts
+
+### OLTP core and OLAP marts
+
+The four loader tables are the relational core (an OLTP-shaped model): each
+table has a clear write grain, foreign keys protect relationships, and
+generated `line_total` keeps monetary arithmetic deterministic. Analytics
+marts are an OLAP-shaped read layer. They aggregate facts for questions such
+as "sales by day" or "customer RFM" without changing the source facts.
+
+The three views are intentionally lean and reproducible:
+
+- `mart_daily_sales`: one row per `(calendar_day, country,
+  is_physical_merchandise)`.
+- `mart_customer_daily`: one row per `(customer_id, calendar_day)`.
+- `mart_customer_snapshot`: one row per identified customer.
+
+The first two are fact-like aggregates. `customers` and `products` behave as
+dimensions, while `invoice_lines` is the transaction fact and `invoices` is
+the canonical header/date dimension. The SQL uses `invoices.invoice_date`,
+not a line timestamp, so one invoice cannot be split across calendar days.
+
+### Contract decisions
+
+The marts use only the `UCI` source namespace. A test sentinel row from a
+previous schema test initially leaked into a mart query and inflated gross
+sales by `19.99`; the explicit source predicate fixed the producer rather
+than masking the downstream total. Valid sale lines provide gross sales,
+units sold and invoice frequency. Physical merchandise cancellation lines
+provide negative return value and positive `units_returned`. Inventory
+adjustments and non-product cancellation lines are excluded. NULL customer
+lines remain in the daily company mart but are excluded from both
+customer-level views.
+
+Snapshot `frequency` is the count of distinct valid-sale invoice numbers.
+`monetary` is valid-sale gross plus physical return value (net monetary
+value), and AOV is gross monetary divided by that frequency. All 5,942
+identified customers remain in the snapshot; 90 customers have no valid sale
+and therefore receive frequency zero and NULL purchase dates/recency rather
+than fabricated values. The reference date is `2011-12-10`.
+
+### SQL concepts in the actual views
+
+`JOIN` combines a line with its invoice header and product dimension. The
+join is composite (`source_system` plus business key), which prevents
+cross-source matches. A fan-out join would multiply `line_total`; the
+integration test checks grain uniqueness and the reconciliation totals.
+
+`WITH eligible_lines AS (...)` is a CTE. It gives the daily views one
+readable filtered input before `GROUP BY` performs aggregation. `SUM` adds
+NUMERIC monetary values and quantities, while `COUNT(DISTINCT invoice_number)`
+counts orders rather than lines. `CASE` separates valid sales from returns.
+The snapshot uses PostgreSQL aggregate `FILTER` clauses for the same
+separation, then a `LEFT JOIN` retains customers with no qualifying sale.
+No window function is needed: the requested RFM metrics are customer-level
+aggregates, not rankings over an ordered partition.
+
+Example input/output for one daily group:
+
+```sql
+SELECT calendar_day, country, gross_sales, return_value, net_sales
+FROM mart_daily_sales
+ORDER BY calendar_day, country
+LIMIT 1;
+```
+
+Input is the retained line fact plus canonical invoice date and product
+classification. Output is one row at the declared grain. `net_sales` is
+gross plus the negative return value. A common error is grouping by line
+date, counting lines as orders, or joining on `stock_code` without the source
+namespace; each can create duplicate revenue.
+
+### Reconciliation and RFM results
+
+The test database was reloaded with the approved loader before mart
+validation. The live PostgreSQL NUMERIC results were:
+
+| Check | Result |
+|---|---:|
+| identified snapshot customers | 5,942 |
+| customers with valid-sale frequency | 5,852 |
+| customers with frequency zero | 90 |
+| daily gross / valid revenue | 19,700,954.44 |
+| daily return value | -719,692.94 |
+| daily net sales | 19,812,261.50 |
+| daily distinct invoices summed by grain | 39,516 |
+| daily units sold / returned | 11,221,957 / 469,882 |
+| customer gross / return / net | 17,124,940.98 / -713,046.25 / 16,411,894.73 |
+
+The customer totals are lower than company totals because NULL customer
+activity is deliberately not attributed to an identified customer. The
+integration test also verifies zero duplicate keys, snapshot count, return
+handling, customer exclusion, and positive AOV for customers with purchases.
+Monetary comparisons use the schema's two-decimal generated `NUMERIC`
+contract, not binary floating-point source sums.
+
+### Performance evidence
+
+`EXPLAIN (ANALYZE, BUFFERS)` was run on the test database without changing
+data. PostgreSQL used parallel sequential scans and hash joins for the large
+line fact, followed by external merge sort/group aggregation. Observed
+execution times were approximately 1.57s for daily sales, 1.29s for customer
+daily, and 1.60s for the snapshot. Sorts spilled to temporary disk (about
+20--36 MB per worker/query), which is the current bottleneck. No index was
+added speculatively; future optimization should be driven by production
+workload and a fresh query plan.
+
+### Reproducible validation
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_sql\test_marts_integration.py -q
+.\.venv\Scripts\python.exe -m pytest tests -q
+```
+
+The focused mart integration test passed (`1 passed in 20.73s`). The full
+regression suite is the next required gate before the Milestone 2.4
+checkpoint commit.

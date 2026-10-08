@@ -762,3 +762,38 @@ ghi rõ, không phải mất dòng.
 
 Milestone 2.4 chưa bắt đầu; loader milestone dừng tại đây để Antigravity
 review.
+
+### Milestone 2.4 — SQL Analytics Marts
+
+Milestone 2.4 adds three reproducible PostgreSQL views:
+
+- `mart_daily_sales`: `(calendar_day, country, is_physical_merchandise)`.
+- `mart_customer_daily`: `(customer_id, calendar_day)`, excluding NULL
+  customer IDs from customer analytics.
+- `mart_customer_snapshot`: one row per 5,942 identified customers with
+  recency, distinct-invoice frequency, net monetary value, AOV and tenure.
+
+The mart SQL separates the OLTP relational core from an OLAP read layer.
+Canonical invoice header dates prevent one invoice from being split across
+days. Composite source-scoped joins prevent cross-source matches, and the
+tests check duplicate grain and reconciliation. Inventory adjustments and
+non-product cancellations are excluded; physical returns remain negative
+return value. Ninety identified customers have no valid sale and remain in
+the snapshot with frequency zero.
+
+Live test-database results using PostgreSQL NUMERIC arithmetic:
+
+- 19,700,954.44 daily gross/valid-sale revenue
+- -719,692.94 physical return value
+- 19,812,261.50 net sales
+- 39,516 distinct invoices
+- 11,221,957 units sold and 469,882 units returned
+- customer-level gross/net: 17,124,940.98 / 16,411,894.73
+- 5,942 snapshot customers, including 5,852 with purchases and 90
+  return-only/no-valid-sale customers
+
+An initial test sentinel row inflated the daily total by 19.99 because the
+view did not filter `source_system='UCI'`. The explicit source filter fixed
+the root cause. The focused integration test then passed. EXPLAIN ANALYZE
+showed hash joins, parallel scans and sort-to-temp as the current
+bottleneck; no speculative index was added.
