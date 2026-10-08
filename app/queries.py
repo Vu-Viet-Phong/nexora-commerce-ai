@@ -556,11 +556,8 @@ def get_rfm_snapshot(
 def compute_rfm_segments(df: pd.DataFrame) -> pd.DataFrame:
     """Compute standard 1-5 RFM scores and business customer segments.
 
-    - Recency score: 5 = most recent (lowest recency_days), 1 = least recent.
-    - Frequency score: 5 = most frequent, 1 = least frequent.
-    - Monetary score: 5 = highest spend, 1 = lowest spend.
-
-    Handles duplicated quantiles cleanly using rank percentile bins.
+    Delegates to the core ML pipeline (src.segmentation.rfm_segmentation)
+    to guarantee identical business definitions and tie-handling.
     """
     if df.empty:
         result = df.copy()
@@ -571,59 +568,19 @@ def compute_rfm_segments(df: pd.DataFrame) -> pd.DataFrame:
         result["rfm_segment"] = "Unknown"
         return result
 
-    result = df.copy()
-
-    # Recency: lower days is better -> invert rank (NaN/null means no valid sale -> worst recency)
-    clean_recency = result["recency_days"].fillna(result["recency_days"].max() + 365)
-    r_pct = clean_recency.rank(pct=True, method="first", ascending=False)
-    result["r_score"] = np.ceil(r_pct * 5).fillna(1).astype(int).clip(1, 5)
-
-    # Frequency: higher is better (NaN -> 0 -> lowest frequency)
-    clean_freq = result["frequency"].fillna(0)
-    f_pct = clean_freq.rank(pct=True, method="first", ascending=True)
-    result["f_score"] = np.ceil(f_pct * 5).fillna(1).astype(int).clip(1, 5)
-
-    # Monetary: higher is better (NaN -> 0 -> lowest spend)
-    clean_monetary = result["monetary"].fillna(0)
-    m_pct = clean_monetary.rank(pct=True, method="first", ascending=True)
-    result["m_score"] = np.ceil(m_pct * 5).fillna(1).astype(int).clip(1, 5)
-
-    result["rfm_score"] = (
-        result["r_score"].astype(str)
-        + result["f_score"].astype(str)
-        + result["m_score"].astype(str)
-    )
-
-    def assign_segment(row: pd.Series) -> str:
-        r = row["r_score"]
-        f = row["f_score"]
-        m = row["m_score"]
-
-        # High-value active buyers
-        if r >= 4 and f >= 4 and m >= 4:
-            return "Champions"
-        if r >= 3 and f >= 3:
-            return "Loyal Customers"
-        if r >= 4 and f <= 2:
-            return "Potential Loyalists"
-        if r >= 3 and f <= 2 and m >= 3:
-            return "Promising"
-        # Slipping / at risk
-        if r <= 2 and f >= 3 and m >= 3:
-            return "At Risk"
-        if r <= 2 and f >= 3 and m <= 2:
-            return "Need Attention"
-        if r <= 2 and f <= 2 and m >= 3:
-            return "About To Sleep"
-        # Inactive
-        if r == 1 and f <= 2:
-            return "Lost"
-        if r <= 2 and f <= 2:
-            return "Hibernating"
-        return "Standard"
-
-    result["rfm_segment"] = result.apply(assign_segment, axis=1)
-    return result
+    from src.segmentation.rfm_segmentation import add_rfm_scores, segment_by_rfm_rules
+    
+    # ML pipeline requires recency_days to be null for active=False.
+    # The snapshot query returns NaN, which is correct.
+    scored = add_rfm_scores(df)
+    segmented = segment_by_rfm_rules(scored)
+    
+    # Map ML pipeline column names to Dashboard expected column names
+    segmented["r_score"] = segmented["recency_score"]
+    segmented["f_score"] = segmented["frequency_score"]
+    segmented["m_score"] = segmented["monetary_score"]
+    
+    return segmented
 
 
 def resample_sales_trend(df: pd.DataFrame, frequency: str = "Daily") -> pd.DataFrame:
