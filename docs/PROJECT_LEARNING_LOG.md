@@ -635,3 +635,66 @@ Milestone 2.2.
 Milestone 2.2 được phép bắt đầu từ repository hiện tại. Schema phải được
 thiết kế từ `data/processed/transactions_clean.parquet` thực tế, không sửa
 processed data và không giả định lại các kết quả đã được Stage 1 xác nhận.
+
+## Milestone 2.2 — Relational Schema & Grain Design
+
+### Concepts
+
+- **Relational database:** Lưu dữ liệu trong các bảng có cấu trúc và quan hệ
+  được kiểm soát bằng khóa, constraint và transaction thay vì chỉ dựa vào
+  quy ước trong file.
+- **Grain:** Mức chi tiết mà một row đại diện. Grain phải được chốt trước khi
+  viết SQL; nếu không, aggregate có thể đếm hoặc cộng cùng một sự kiện nhiều
+  lần.
+- **Primary key:** Định danh duy nhất một row trong bảng. Schema dùng
+  composite business keys có `source_system` cho customers, products và
+  invoices; `invoice_lines` dùng `line_id` nội bộ.
+- **Foreign key:** Ràng buộc tham chiếu bảo đảm invoice line trỏ tới invoice,
+  product và customer hợp lệ. Customer FK nullable để giữ guest transactions.
+- **Surrogate/internal key:** `line_id` là identity key nội bộ, không dùng
+  `StockCode` làm line key vì một product xuất hiện trên nhiều lines.
+- **Normalization:** Tách customer, product, invoice header và invoice line
+  để giảm lặp thuộc tính, trong khi các cờ và measures vẫn ở line grain.
+- **Cardinality:** Một customer có nhiều invoices và lines; một invoice có
+  nhiều lines; một product có nhiều lines. Đây là các quan hệ 1:N và chiều
+  ngược lại là N:1.
+- **Fact vs dimension:** `invoice_lines` và `invoices` là transaction facts;
+  `customers` và `products` là descriptive dimensions. Schema hiện tại ưu
+  tiên core relational foundation, chưa tạo marts.
+- **Nullable field:** `customer_id` nullable vì 235,287 processed lines thiếu
+  Customer ID. Không tạo dummy customer và không silent-drop các lines này.
+- **NUMERIC vs FLOAT:** Money dùng `NUMERIC(12,2)`/`NUMERIC(14,2)` để tránh
+  sai số binary floating point; không dùng FLOAT, REAL hoặc DOUBLE PRECISION.
+- **Index:** Chỉ tạo index cho foreign-key/join columns và invoice date,
+  tránh index mọi cột flag gây write overhead không cần thiết.
+- **Source namespace:** `source_system` nằm trong identity/FK để UCI, MMRec và
+  Amazon có thể cùng tồn tại mà không trộn invoice hoặc stock code trùng tên.
+- **Join fan-out:** Join phải theo đúng composite key và đúng grain. Join
+  thiếu source namespace hoặc join dimension không unique có thể nhân số row.
+- **Revenue nhân do sai grain:** Nếu invoice header bị join với nhiều lines
+  rồi tổng header amount, cùng một invoice amount sẽ được lặp theo số lines.
+  Vì vậy revenue line-level phải aggregate từ `invoice_lines`, còn header
+  amount phải được aggregate ở invoice grain.
+
+### Nexora decisions
+
+Processed schema thực tế có 25 columns và 1,044,848 rows. Các grain được cố
+định như sau:
+
+- `customers`: một row cho mỗi identified `Customer ID` trong một
+  `source_system`; 5,942 customer IDs; missing IDs không tạo dimension row.
+- `products`: một row cho mỗi normalized `StockCode` trong một
+  `source_system`; 5,131 stock codes; special/non-product codes vẫn được
+  biểu diễn để không mất ledger provenance.
+- `invoices`: một row cho mỗi `Invoice` trong một `source_system`; 53,628
+  invoice headers; `invoice_date` dùng timestamp nhỏ nhất khi một invoice có
+  nhiều timestamp.
+- `invoice_lines`: một row cho mỗi retained processed transaction line,
+  gồm cancellation, return, inventory adjustment, bad debt, non-product và
+  duplicate flags; không silent-drop ambiguity.
+
+`source_line_key` là stable source-level identifier do loader tạo từ source
+namespace, source sheet và deterministic source row ordinal. `line_id` chỉ là
+internal identity và không thay thế source provenance. SHA-256, sheet và row
+ordinal được lưu để truy nguyên file nguồn. `line_total` là generated
+`NUMERIC` từ quantity và unit price; raw/processed Parquet không bị sửa.
