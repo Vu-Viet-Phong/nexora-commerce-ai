@@ -15,6 +15,7 @@ dependencies = [
     "scikit-learn",
     "SQLAlchemy",
     "psycopg[binary]",
+    "streamlit",
 ]
 
 [project.optional-dependencies]
