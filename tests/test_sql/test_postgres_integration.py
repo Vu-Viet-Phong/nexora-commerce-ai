@@ -1,64 +1,18 @@
-import os
 from pathlib import Path
-from urllib.parse import quote, unquote
 
 import pytest
+from sqlalchemy import text
 
 
-def load_local_env() -> None:
-    env_file = Path(__file__).parents[2] / ".env"
-    if not env_file.exists():
-        return
-    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
-
-
-def normalize_database_url(url: str) -> str:
-    marker = "@localhost:5432/"
-    if marker not in url:
-        return url
-    prefix, host_and_path = url.rsplit(marker, 1)
-    scheme, credentials = prefix.split("://", 1)
-    username, password = credentials.split(":", 1)
-    return (
-        f"{scheme}://{username}:{quote(unquote(password), safe='')}"
-        f"{marker}{host_and_path}"
-    )
-
-
-load_local_env()
-DATABASE_URL = os.getenv("NEXORA_TEST_DATABASE_URL")
-if DATABASE_URL:
-    DATABASE_URL = normalize_database_url(DATABASE_URL)
-
-pytestmark = pytest.mark.skipif(
-    not DATABASE_URL,
-    reason="NEXORA_TEST_DATABASE_URL is not configured",
-)
-
-
-def test_schema_applies_and_enforces_referential_integrity() -> None:
+def test_schema_applies_and_enforces_referential_integrity(database_sandbox) -> None:
     sqlalchemy = pytest.importorskip("sqlalchemy")
-    from sqlalchemy import text
     from sqlalchemy.exc import IntegrityError
 
-    engine = sqlalchemy.create_engine(DATABASE_URL)
-    schema = (
-        Path(__file__).parents[2] / "sql" / "schema.sql"
-    ).read_text(encoding="utf-8")
-    with engine.begin() as connection:
-        connection.execute(
-            text(
-                """
-                DROP TABLE IF EXISTS invoice_lines, invoices, products,
-                customers CASCADE
-                """
-            )
-        )
+    schema = (Path(__file__).parents[2] / "sql" / "schema.sql").read_text(
+        encoding="utf-8"
+    )
+    with database_sandbox.engine.begin() as connection:
+        database_sandbox.set_search_path(connection)
         for statement in schema.split(";"):
             if statement.strip():
                 connection.execute(text(statement))
@@ -67,7 +21,7 @@ def test_schema_applies_and_enforces_referential_integrity() -> None:
                 """
                 SELECT table_name
                 FROM information_schema.tables
-                WHERE table_schema = 'public'
+                WHERE table_schema = current_schema()
                   AND table_name IN (
                       'customers', 'products', 'invoices', 'invoice_lines'
                   )
@@ -85,7 +39,7 @@ def test_schema_applies_and_enforces_referential_integrity() -> None:
                 """
                 SELECT table_name, constraint_type
                 FROM information_schema.table_constraints
-                WHERE table_schema = 'public'
+                WHERE table_schema = current_schema()
                   AND table_name IN (
                       'customers', 'products', 'invoices', 'invoice_lines'
                   )
@@ -106,7 +60,7 @@ def test_schema_applies_and_enforces_referential_integrity() -> None:
                 """
                 SELECT table_name, column_name
                 FROM information_schema.columns
-                WHERE table_schema = 'public'
+                WHERE table_schema = current_schema()
                   AND data_type = 'numeric'
                 """
             )
@@ -126,7 +80,7 @@ def test_schema_applies_and_enforces_referential_integrity() -> None:
                 """
                 SELECT indexname
                 FROM pg_indexes
-                WHERE schemaname = 'public'
+                WHERE schemaname = current_schema()
                 """
             )
         ).scalars().all()

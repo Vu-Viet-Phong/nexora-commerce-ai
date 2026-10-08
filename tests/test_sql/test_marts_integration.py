@@ -1,19 +1,10 @@
-import os
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 
-from src.data.load import load_local_env, normalize_database_url
-
-
-load_local_env()
-DATABASE_URL = os.getenv("NEXORA_TEST_DATABASE_URL")
-pytestmark = pytest.mark.skipif(
-    not DATABASE_URL,
-    reason="NEXORA_TEST_DATABASE_URL is not configured",
-)
+from src.data.load import load_source
 
 ROOT = Path(__file__).parents[2]
 MART_FILES = (
@@ -28,12 +19,25 @@ def install_marts(connection) -> None:
         connection.execute(text(path.read_text(encoding="utf-8")))
 
 
-def test_marts_reconcile_grain_and_rfm() -> None:
-    engine = create_engine(normalize_database_url(DATABASE_URL))
+@pytest.mark.full_data
+def test_marts_reconcile_grain_and_rfm(database_sandbox) -> None:
+    engine = database_sandbox.engine
     with engine.begin() as connection:
+        database_sandbox.set_search_path(connection)
+        schema = (ROOT / "sql" / "schema.sql").read_text(encoding="utf-8")
+        for statement in schema.split(";"):
+            if statement.strip():
+                connection.execute(text(statement))
+    load_source(
+        database_sandbox.database_url,
+        schema=database_sandbox.schema,
+    )
+    with engine.begin() as connection:
+        database_sandbox.set_search_path(connection)
         install_marts(connection)
 
     with engine.connect() as connection:
+        database_sandbox.set_search_path(connection)
         assert connection.execute(
             text("SELECT COUNT(*) FROM mart_customer_snapshot")
         ).scalar_one() == 5_942

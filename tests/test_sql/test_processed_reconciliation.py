@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import pandas as pd
 
 
@@ -9,6 +10,8 @@ DATASET = (
     / "processed"
     / "transactions_clean.parquet"
 )
+
+pytestmark = pytest.mark.full_data
 
 
 def load_processed() -> pd.DataFrame:

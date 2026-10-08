@@ -251,11 +251,16 @@ def load_source(
     source_path: Path = DEFAULT_SOURCE,
     *,
     fail_after: str | None = None,
+    schema: str | None = None,
 ) -> dict[str, Any]:
     """Atomically replace this source namespace and return load metrics."""
     customers, products, invoices, lines = prepare_frames(source_path)
     engine = create_engine(normalize_database_url(database_url), pool_pre_ping=True)
     with engine.begin() as connection:
+        if schema is not None:
+            if not schema.isidentifier():
+                raise ValueError("schema must be a valid SQL identifier")
+            connection.execute(text(f'SET LOCAL search_path TO "{schema}"'))
         actual_database = connection.execute(text("SELECT current_database()")).scalar_one()
         for table in ("invoice_lines", "invoices", "products", "customers"):
             connection.execute(

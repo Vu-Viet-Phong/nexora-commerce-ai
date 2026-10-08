@@ -66,6 +66,39 @@ Git quản lý source và documentation. Repository hiện tại có remote GitH
 branch chính là `main`. GitHub CLI có thể dùng cho các thao tác GitHub, nhưng
 commit/push trong Stage 1 vẫn là Git operations thông thường.
 
+## 6. Milestone 2.4 — Test isolation and runtime optimization
+
+The PostgreSQL integration tests previously shared the `public` schema. The
+schema test and loader test both dropped the same four tables, while the marts
+test read whichever state a previous test left behind. That made the result
+depend on collection order and could leave the test database in an empty
+sentinel-like state. The database was not changing because of a business-metric
+calculation; it was being changed by destructive test setup.
+
+Schema integration tests now use a per-test PostgreSQL schema and never drop
+objects in `public`. The loader accepts an explicit schema for this test-only
+namespace, and the full-data loader and marts tests each create their own
+schema and load their own source before asserting metrics. This removes the
+ordering dependency without changing the production database or metric logic.
+
+The complete Parquet and PostgreSQL reconciliation tests are marked
+`full_data` and are skipped by default. Run them deliberately with
+`pytest --run-full-data`; ordinary unit tests continue to use small,
+deterministic in-memory fixtures. This keeps the 1,044,848-row load out of
+normal feedback loops while preserving a separate, explicit reconciliation
+path for release verification.
+
+Measured runtimes in this environment:
+
+- Default unit/schema group: 16 passed, 6 skipped in 2.79 seconds.
+- Full-data loader/idempotency group: 1 passed in 609.86 seconds.
+- Full-data marts reconciliation group: 1 passed in 194.82 seconds.
+
+The loader is the main bottleneck because it prepares and copies the complete
+dataset and repeats the load for idempotency and rollback checks. Marts
+reconciliation is the second bottleneck because it builds all three views over
+the full fact table. Neither group is suitable for every local test cycle.
+
 ## 5. Git & GitHub Setup
 
 `git init` tạo local repository; `.gitignore` loại raw datasets, generated
