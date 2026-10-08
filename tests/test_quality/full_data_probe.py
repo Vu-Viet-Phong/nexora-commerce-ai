@@ -99,7 +99,13 @@ def main(argv=None) -> int:
     qualified(args.schema, "invoice_lines")
     if not args.schema.startswith("codex_quality_full_"):
         parser.error("schema must use the codex_quality_full_ ownership prefix")
-    url = make_url(os.environ["NEXORA_QUALITY_TEST_DATABASE_URL"])
+    configured = os.getenv("NEXORA_QUALITY_TEST_DATABASE_URL")
+    if not configured:
+        parser.error("NEXORA_QUALITY_TEST_DATABASE_URL is not configured")
+    try:
+        url = make_url(configured)
+    except Exception:
+        parser.error("Invalid private PostgreSQL configuration; connection details are not logged")
     if url.get_backend_name() != "postgresql" or url.database != "nexora_quality_codex_test":
         parser.error("requires the dedicated nexora_quality_codex_test database")
     url = url.set(drivername="postgresql+psycopg")

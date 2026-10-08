@@ -88,6 +88,9 @@ class QualityReport:
         def cell(value: Any) -> str:
             if value is None:
                 return "—"
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                   default=lambda v: format(v, "f") if isinstance(v, Decimal) else str(v))
             return str(value).replace("|", "\\|").replace("\n", " ")
         rows = [
             "# Nexora data quality report",

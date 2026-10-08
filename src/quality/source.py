@@ -145,9 +145,11 @@ def source_expectations(path: Path, *, batch_size: int = 50_000) -> dict:
     }
 
 
-def record_differences(expected: dict, rows) -> dict[str, int]:
+def record_differences(expected: dict, rows, *, consume: bool = False) -> dict[str, int]:
     """Detect missing/extra records and same-key payload changes, not just counts."""
-    remaining = expected.copy()
+    # The runner uses this index once; avoid a second million-key dictionary.
+    # Standalone callers retain the existing non-mutating default.
+    remaining = expected if consume else expected.copy()
     extra = changed = 0
     for row in rows:
         key = (str(row["source_sheet"]), int(row["source_row_number"]))
@@ -238,7 +240,7 @@ def reconcile_source(connection, source_path: Path, schema: str) -> list[Validat
         with connection.execute(text(
             f"SELECT {columns} FROM {lines} WHERE source_system = :source"
         ), params, execution_options={"yield_per": 50_000}).mappings() as rows:
-            return record_differences(expected["record_hashes"], rows)
+            return record_differences(expected["record_hashes"], rows, consume=True)
 
     check("source.records", {"missing": 0, "extra": 0, "changed": 0}, records)
     check("source.provenance", {t: 0 for t in tables}, lambda: {

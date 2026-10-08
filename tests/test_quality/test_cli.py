@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -92,3 +93,55 @@ def test_empty_report_is_not_a_green_gate():
     report = QualityReport("UCI", "public")
     assert report.summary["status"] == "SKIP"
     assert report.gate_summary["status"] == "SKIP"
+
+
+@pytest.mark.parametrize("option", ["--json-out", "--markdown-out"])
+@pytest.mark.parametrize("destination", ["source.parquet", ".env", ".env.local", ".ENV", ".ENV.LOCAL"])
+def test_reports_cannot_overwrite_source_or_environment(monkeypatch, tmp_path, destination, option):
+    engine = MagicMock()
+    monkeypatch.setattr(cli, "create_engine", engine)
+    source = tmp_path / "source.parquet"
+    source.write_bytes(b"immutable fixture sentinel")
+    with pytest.raises(SystemExit) as error:
+        cli.main(["--source", str(source), option, str(tmp_path / destination)])
+    assert error.value.code == 2
+    assert source.read_bytes() == b"immutable fixture sentinel"
+    engine.assert_not_called()
+
+
+def test_markdown_aggregates_are_readable_json_without_decimal_repr():
+    report = QualityReport("UCI", "public", [
+        compare("money", {"ledger": Decimal("8.00")}, {"ledger": Decimal("8.00")}),
+    ])
+    markdown = report.to_markdown()
+    assert '{"ledger": "8.00"}' in markdown
+    assert "Decimal(" not in markdown
+
+
+@pytest.mark.parametrize("option", ["--json-out", "--markdown-out"])
+def test_report_cannot_overwrite_source_through_hardlink(monkeypatch, tmp_path, option):
+    import os
+    engine = MagicMock()
+    monkeypatch.setattr(cli, "create_engine", engine)
+    source, alias = tmp_path / "source.parquet", tmp_path / "report.json"
+    source.write_bytes(b"immutable hardlink sentinel")
+    os.link(source, alias)
+    with pytest.raises(SystemExit) as error:
+        cli.main(["--source", str(source), option, str(alias)])
+    assert error.value.code == 2
+    assert source.read_bytes() == b"immutable hardlink sentinel"
+    engine.assert_not_called()
+
+
+def test_json_and_markdown_outputs_cannot_alias(monkeypatch, tmp_path):
+    import os
+    engine = MagicMock()
+    monkeypatch.setattr(cli, "create_engine", engine)
+    json_file, md_file = tmp_path / "quality.json", tmp_path / "quality.md"
+    json_file.write_bytes(b"existing report sentinel")
+    os.link(json_file, md_file)
+    with pytest.raises(SystemExit) as error:
+        cli.main(["--json-out", str(json_file), "--markdown-out", str(md_file)])
+    assert error.value.code == 2
+    assert json_file.read_bytes() == b"existing report sentinel"
+    engine.assert_not_called()

@@ -30,8 +30,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError("source_system must contain 1–32 characters")
         if args.statement_timeout_ms <= 0:
             raise ValueError("statement-timeout-ms must be positive")
-        if args.json_out and args.markdown_out and args.json_out.resolve() == args.markdown_out.resolve():
+        if args.json_out and args.markdown_out and (
+            args.json_out.resolve() == args.markdown_out.resolve() or
+            (args.json_out.exists() and args.markdown_out.exists()
+             and args.json_out.samefile(args.markdown_out))
+        ):
             raise ValueError("JSON and Markdown output paths must differ")
+        for destination in (args.json_out, args.markdown_out):
+            if destination is None:
+                continue
+            if destination.name.casefold() == ".env" or destination.name.casefold().startswith(".env."):
+                raise ValueError("Report output must not overwrite environment configuration")
+            same_source = args.source and (destination.resolve() == args.source.resolve() or
+                (destination.exists() and args.source.exists() and destination.samefile(args.source)))
+            if same_source:
+                raise ValueError("Report output must not overwrite the immutable Parquet source")
     except ValueError as error:
         parser.error(str(error))
     report = QualityReport(args.source_system, args.schema)

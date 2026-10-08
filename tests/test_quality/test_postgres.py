@@ -189,7 +189,9 @@ def test_opt_in_full_data_source_reconciliation(quality_sandbox):
     report, checks = results(quality_sandbox)
     source_results = [r for r in report.results if r.name.startswith("source.")]
     assert all(r.status == "PASS" for r in source_results), report.to_json()
-    assert checks["source.row_counts"].actual["invoice_lines"] > 0
+    assert checks["source.row_counts"].actual["invoice_lines"] == 1_044_848
+    assert report.gate_summary["status"] == "PASS", report.to_json()
+    assert report.summary == {"PASS": 48, "FAIL": 0, "SKIP": 3, "status": "SKIP", "total": 51}
 
 
 @pytest.mark.parametrize("corrupt", [False, True])

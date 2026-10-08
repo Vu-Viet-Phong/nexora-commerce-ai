@@ -124,3 +124,15 @@ def test_source_handles_raw_nonzero_prices_rounding_to_zero(tmp_path):
     assert expected["money"]["ledger"] == Decimal("0.00")
     assert expected["flag_counts"]["has_valid_price"] == 1
     assert expected["flag_counts"]["is_price_negative"] == 1
+
+
+def test_record_index_can_be_consumed_without_changing_results(tmp_path):
+    path = make_source(tmp_path)
+    expected = source_expectations(path)
+    *_, lines = prepare_frames(path)
+    rows = lines.to_dict("records")
+    original = expected["record_hashes"].copy()
+    wanted = record_differences(original, rows)
+    assert len(original) == 8  # Public default stays non-mutating.
+    assert record_differences(expected["record_hashes"], rows, consume=True) == wanted
+    assert expected["record_hashes"] == {}
