@@ -874,3 +874,64 @@ Runtime đo được bằng `.venv` Python 3.11.16: regression suite **16 passed
 224.67s**. Test full loader không chạy lại ở checkpoint này; mart test tự tạo
 schema UUID riêng, load trong namespace riêng rồi teardown `CASCADE`, nên
 không đụng database/test schema của worktree khác.
+
+### Stage 3 Analytics — Customer Analytics, EDA và Feature Engineering
+
+Checkpoint `feat/customer-analytics` triển khai
+[`src/analytics/customer_analytics.py`](../src/analytics/customer_analytics.py)
+và tài liệu
+[`docs/learning/customer_analytics_feature_engineering.md`](learning/customer_analytics_feature_engineering.md).
+Feature query chỉ đọc `mart_customer_daily`, cắt theo `as_of_date`, aggregate
+về đúng một row/customer rồi validate uniqueness, numeric finite values và
+non-negative temporal metrics. Vì chỉ trả khoảng 5.942 customer rows về
+Python, pipeline không load 1 triệu fact lines vào RAM.
+
+Production output hiện chỉ có các feature đã có contract: recency,
+frequency, monetary, AOV và tenure, cùng customer ID, country và reference
+date. Distinct products, return frequency, purchase time activity và
+spending variability được ghi nhận pending vì metric contract chưa định nghĩa
+cửa sổ và denominator; chưa đưa vào ML output.
+
+EDA read-only có đủ 10 nhóm: sales distribution, customer behavior, order
+frequency, spending, product popularity, country, returns, missing customer
+ID, temporal pattern và sparsity/long-tail. Kết quả thật trên
+`nexora_commerce`: 5.942 feature rows, 10/10 EDA sections, customer
+monetary £16,411,894.73, top-100 positive-monetary share 36.68%, missing
+customer lines 235.287/1.044.848 và return value -£719,692.94.
+
+Unit tests analytics **5 passed**; full suite trong worktree
+**20 passed, 7 skipped trong 0.91s**. Read-only smoke test database thật
+pass. Một lỗi SQL long-tail do ambiguous `frequency` đã được sửa bằng cách
+bỏ join dư thừa và tính top-100 share trực tiếp trên CTE ranked. Không có
+database write, customer artifact hoặc secret nào được commit.
+
+### Stage 3 Analytics — Customer Segmentation Baseline
+
+Branch `feat/customer-analytics` tiếp tục xây dựng baseline segmentation từ
+customer features đã có. `scikit-learn` được thêm vào dependency manifest;
+code mới tại
+[`src/segmentation/rfm_segmentation.py`](../src/segmentation/rfm_segmentation.py)
+không sửa SQL marts và không lưu model/customer artifact lớn.
+
+RFM rule-based scoring dùng quantile 1--5 với recency đảo chiều, frequency và
+monetary cùng chiều. Rule thresholds là thử nghiệm, chưa phải business
+contract. Kết quả thật trên 5.942 customers: Champions 1.282, Loyal
+Customers 1.128, Potential Loyalists 697, At Risk 830, Lost Customers 1.601,
+Other 404. Coverage đủ 100%.
+
+K-Means dùng `signed_log1p` cho R/F/M để xử lý monetary âm và long-tail, sau
+đó `StandardScaler`, random seed 42, `n_init=20`. Benchmark k=2..8 chọn k=2
+theo silhouette cao nhất **0.425752**. Hai cluster có 2.452 và 3.490
+customers; profile raw cho thấy cluster 0 gần đây hơn, frequency và monetary
+cao hơn. Stability giữa seed 42/43 đạt ARI **0.997306**. Đây là kết quả
+thực nghiệm, chưa phải production approval.
+
+Edge case quan trọng: 90 customer không có valid sale có recency NULL. Source
+feature giữ NULL; riêng modelling copy impute thành `max(active recency)+1`.
+Return-only customer có monetary âm được giữ nguyên; không dùng `log1p` máy
+móc vì sẽ lỗi miền giá trị hoặc làm mất dấu.
+
+Segmentation tests **6 passed**; full suite sau dependency/code
+**26 passed, 7 skipped**. Các kiểm tra gồm scoring, coverage, missing value,
+negative monetary, deterministic clustering, invalid/empty input, cluster
+profile và stability. Không dùng accuracy vì không có ground-truth labels.
