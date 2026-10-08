@@ -167,13 +167,17 @@ Bộ kiểm thử tự động độc lập, không phụ thuộc vào cơ sở 
 | `get_available_countries()` | `engine` | `list[str]` | Lấy danh sách 43 quốc gia có phát sinh giao dịch cho dropdown bộ lọc. |
 | `get_sales_kpis()` | `engine, start_date, end_date, country` | `dict[str, float]` | Tính tổng doanh thu gộp, doanh thu thuần, tiền hoàn, số đơn hàng, AOV trực tiếp trên DB. |
 | `get_daily_sales_trend()` | `engine, start_date, end_date, country` | `pd.DataFrame` | Lấy chuỗi thời gian doanh thu hàng ngày phục vụ vẽ biểu đồ xu hướng. |
+| `resample_sales_trend()` | `df, frequency ('Daily'/'Weekly'/'Monthly')` | `pd.DataFrame` | Resample chuỗi thời gian doanh thu sang chu kỳ Tuần hoặc Tháng mà vẫn bảo toàn tổng số tiền. |
 | `get_sales_by_country()` | `engine, start_date, end_date, limit` | `pd.DataFrame` | Xếp hạng các thị trường quốc tế theo doanh thu thuần. |
+| `calculate_country_shares()` | `df, total_net_sales` | `pd.DataFrame` | Tính tỉ trọng thị phần (Market Share %) của từng quốc gia trên tổng doanh thu. |
 | `get_merchandise_breakdown()`| `engine, start_date, end_date, country` | `pd.DataFrame` | Phân tích tỉ trọng giữa Hàng hóa vật lý (Physical) và Phí dịch vụ/Bưu điện. |
-| `get_customer_kpis()` | `engine, country` | `dict[str, float]` | Tính tổng số khách hàng, tổng chi tiêu, tần suất mua trung bình, AOV trung bình. |
-| `get_customer_daily_trend()`| `engine, start_date, end_date` | `pd.DataFrame` | Theo dõi số lượng khách hàng mua hàng hoạt động hàng ngày (Active Buyers). |
+| `get_customer_kpis()` | `engine, country` | `dict[str, float]` | Tính tổng số khách hàng, khách mua lại (Repeat), tỷ lệ mua lại (%), tổng chi tiêu, AOV. |
+| `get_customer_daily_trend()`| `engine, start_date, end_date` | `pd.DataFrame` | Theo dõi số lượng khách hàng mua hàng hoạt động hàng ngày (Active Buyers) và chi tiêu ngày. |
 | `get_top_customers()` | `engine, country, limit` | `pd.DataFrame` | Bảng xếp hạng Top khách hàng chi tiêu nhiều nhất. |
 | `get_rfm_snapshot()` | `engine, country` | `pd.DataFrame` | Lấy bảng dữ liệu 5,942 khách hàng kèm các chỉ số R, F, M. |
-| `compute_rfm_segments()` | `df: pd.DataFrame` | `pd.DataFrame` | Tính điểm 1-5 cho R, F, M bằng percentiles và gán phân khúc khách hàng. |
+| `compute_rfm_segments()` | `df: pd.DataFrame` | `pd.DataFrame` | Tính điểm 1-5 cho R, F, M bằng percentiles và gán phân khúc khách hàng (Champions, At Risk...). |
+| `compute_customer_distributions()` | `df: pd.DataFrame` | `tuple[pd.DataFrame, pd.DataFrame]` | Phân loại khách hàng theo nhóm tần suất mua (Frequency Tiers) và khung ngân sách chi tiêu. |
+| `summarize_rfm_segments()` | `df: pd.DataFrame` | `pd.DataFrame` | Tạo bảng ma trận phân tích doanh thu, số lượng khách, AOV, và tỉ trọng % đóng góp của từng phân khúc. |
 
 ---
 
@@ -238,11 +242,57 @@ Kết quả trả về chỉ là **1 dòng duy nhất** dung lượng vài chụ
 
 ## 10. Data Visualization Trong Dashboard
 
-Dashboard kết hợp các thành phần trực quan:
-1. **KPI Metric Cards:** Hiển thị doanh thu, đơn hàng, AOV với delta hiển thị tỷ lệ hoàn trả hàng (Return Rate %).
-2. **Time-Series Line Charts:** Biểu diễn doanh thu gộp vs doanh thu thuần qua thời gian, nhận diện các mùa vụ cao điểm (ví dụ tháng 11 - 12 Black Friday và Giáng Sinh).
-3. **Horizontal Bar Charts:** Xếp hạng các thị trường quốc tế hàng đầu (United Kingdom, EIRE, Germany, France, Netherlands...).
-4. **Distribution Bar Charts & Dataframes:** Biểu đồ cơ cấu nhóm khách hàng RFM và bảng chi tiết danh sách khách hàng VIP.
+Dashboard được thiết kế theo tư duy **Executive Data Storytelling** với 3 cấp độ phân tích:
+
+### A. Sales Analytics Visualizations (Tab 1)
+1. **Executive Metric Cards:**
+   - `Gross Sales` & `Valid Sales`: Doanh thu gộp từ các đơn hàng hợp lệ.
+   - `Returns & Refunds` & `Return Rate %`: Số tiền hoàn trả và tỷ lệ hàng bị trả lại (3.65%).
+   - `Net Sales` & `Net Realization Rate %`: Doanh thu thực tế sau khi khấu trừ hoàn hàng (£18.98M, realization ~96.35%).
+   - `Total Orders` & `Units Sold/Returned`: Số lượng hóa đơn (39,516 đơn) và khối lượng hàng lưu chuyển (11.22M sản phẩm bán, 469k sản phẩm trả).
+   - `Average Order Value (AOV)`: Giá trị đơn hàng trung bình (£480.34) và số lượng sản phẩm bình quân/đơn.
+2. **Interactive Time-Series Controls:**
+   - Bộ chọn độ phân giải thời gian: `Daily` (604 ngày phát sinh giao dịch), `Weekly` (Resample theo tuần), `Monthly` (Resample theo tháng).
+   - 3 Chế độ hiển thị:
+     - `Net & Gross Sales`: Đường xu hướng so sánh doanh thu thuần và doanh thu gộp.
+     - `Units Sold & Returned`: Biểu đồ cột thể hiện khối lượng hàng bán ra so với hàng trả về.
+     - `Cumulative Net Sales`: Biểu đồ diện tích (Area Chart) lũy kế doanh thu qua thời gian.
+3. **Geographic Distribution & Market Share:**
+   - Biểu đồ cột ngang Top 10 thị trường quốc tế theo doanh thu thuần (United Kingdom, EIRE, Netherlands, Germany, France...).
+   - Bảng ma trận thị phần: Tính toán tỷ trọng đóng góp (%) của từng thị trường trên tổng doanh thu toàn cầu.
+4. **Data Governance & Product Integrity Callout:**
+   - Thẻ thông tin nghiệp vụ giải thích 100% doanh thu trong `mart_daily_sales` là hàng hóa vật lý (`Physical Merchandise`), các mã phí dịch vụ được bóc tách riêng.
+
+### B. Customer Analytics Visualizations (Tab 2)
+1. **Retention & Lifetime Metrics:**
+   - `Identified Customers` (5,942 tài khoản) và số lượng khách chỉ mua 1 lần (1,618).
+   - `Repeat Customer Rate %` (71.3% khách hàng mua lại với 4,234 tài khoản trung thành).
+   - `Customer Lifetime Spend` (£16.41M) và giá trị bình quân/khách hàng (£2,761.85).
+   - `Avg Frequency` (6.2 đơn hàng) và `Avg Customer AOV` (£386.11).
+   - `Avg Tenure` (474.5 ngày) và `Avg Recency` (200.7 ngày).
+2. **Frequency Tiers & Spending Brackets:**
+   - Biểu đồ tần suất mua: 0 Orders (1.5%), 1 Order (27.2%), 2-4 Orders (35.2%), 5-9 Orders (19.9%), 10+ Orders (16.2%).
+   - Biểu đồ ngân sách chi tiêu: Khung dưới £500, £500 - £2,000, £2,000 - £5,000, £5,000 - £20,000, £20,000+ VIP.
+3. **Daily Purchasing Dynamics:**
+   - Biểu đồ theo dõi số lượng người mua hoạt động hàng ngày (`Active Buyers`).
+   - Biểu đồ theo dõi tổng chi tiêu khách hàng hàng ngày (`Daily Net Spend`).
+4. **Top 15 VIP Customers Table:**
+   - Xếp hạng chi tiết các tài khoản chi tiêu hàng đầu kèm Quốc gia, Số đơn, AOV, Recency, Tenure và Ngày mua gần nhất.
+
+### C. RFM Segmentation & Strategic CRM Visualizations (Tab 3)
+1. **Strategic Segment Header:**
+   - Thẻ KPI Champions (22% khách hàng, đóng góp 69.7% tổng doanh thu).
+   - Thẻ Loyal Customers (24.1% khách, 15.6% doanh thu).
+   - Thẻ At Risk (10.4% khách hàng từng chi tiêu cao nhưng đang nguội lạnh, 8.1% doanh thu cần win-back).
+   - Thẻ Lost (13.5% tài khoản không còn hoạt động).
+2. **RFM Quintile Distributions:**
+   - 3 biểu đồ phân bổ điểm số: R-Score (1-5), F-Score (1-5), M-Score (1-5).
+3. **Pareto Profile Matrix:**
+   - Biểu đồ đối chiếu: Số lượng khách theo phân khúc vs Tổng doanh thu theo phân khúc.
+   - Bảng ma trận tổng hợp toàn diện: Tỉ lệ khách (%), Tỉ lệ doanh thu (%), Chi tiêu trung bình, Recency trung bình, Frequency trung bình.
+4. **Interactive CRM Drilldown & Actionable Playbook:**
+   - Hộp chọn phân khúc cho phép lọc tức thì danh sách khách hàng thuộc phân khúc đó.
+   - Thẻ chiến lược CRM khuyến nghị hành động cụ thể cho từng nhóm (chương trình tri ân VIP, voucher tái kích hoạt, khảo sát win-back...).
 
 ---
 
@@ -350,12 +400,15 @@ tests/test_dashboard.py::test_missing_table_raises_database_query_error PASSED
   - Phân bố tần suất mua hàng (One-Time, Occasional, Frequent, VIP Power Buyers) và các phân khúc ngân sách chi tiêu.
   - Biểu đồ chuỗi thời gian người mua hoạt động hàng ngày (Active Buyers) và chi tiêu hàng ngày từ `mart_customer_daily`.
   - Bảng xếp hạng Top 15 khách hàng VIP có giá trị chi tiêu cao nhất kèm thông tin quốc gia, số đơn, AOV và ngày mua cuối.
-- **Checkpoint D:** Hoàn thiện RFM Analytics Section:
+- **Checkpoint D (`2b30bb0`):** Hoàn thiện RFM Analytics Section:
   - Thẻ chỉ số phân khúc chiến lược: Champions (22.0% khách, đóng góp 69.7% doanh thu), Loyal Customers (15.6% doanh thu), At Risk (8.1% doanh thu cần win-back khẩn cấp), Lost Accounts.
   - Biểu đồ phân bổ 3 thành phần điểm số R-Score (1-5), F-Score (1-5), M-Score (1-5).
   - Bảng ma trận đóng góp doanh thu theo phân khúc RFM kèm biểu đồ cơ cấu trực quan.
   - Công cụ drilldown chọn từng phân khúc khách hàng kèm khuyến nghị chiến lược CRM hành động thực tế.
-- **Checkpoint E:** (Kế tiếp) Hoàn thiện toàn diện, kiểm tra an ninh và kiểm thử hồi quy.
+- **Checkpoint E:** Hoàn thiện toàn diện MVP, kiểm tra an ninh, tối ưu UI/UX và kiểm thử:
+  - 23 unit & contract tests pass 100% trong 1.19s; 38 tests toàn repo pass trong 0.70s.
+  - Đảm bảo an ninh tuyệt đối: zero secrets, zero password leaks, `.env` được ignore đúng quy định.
+  - Hoàn thiện tài liệu 16 chương chi tiết bằng tiếng Việt phục vụ học tập và bàn giao.
 
 ---
 
