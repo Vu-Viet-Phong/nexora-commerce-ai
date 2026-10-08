@@ -28,7 +28,8 @@ This document defines the **canonical mathematical formulas, operational SQL fil
   WHERE is_valid_sale = TRUE;
   ```
 - **Dimensional Grain:** Evaluated at Line Item level (`fact_invoice_lines`); aggregateable by Date, Country, Customer, Product.
-- **Baseline Benchmark Value:** **£19,700,939.69**
+- **Baseline Benchmark Value:** **£19,700,954.44** in PostgreSQL `NUMERIC`
+  arithmetic (the source float audit remains £19,700,939.69).
 - **Mandatory Inclusions:**
   - Standard physical products with `Quantity > 0` and `Price > 0`.
   - Guest checkout transactions (`customer_id IS NULL` is included, contributing £2,576,013.46).
@@ -53,7 +54,8 @@ This document defines the **canonical mathematical formulas, operational SQL fil
   WHERE is_cancellation = TRUE AND is_non_product = FALSE;
   ```
 - **Dimensional Grain:** Evaluated at Line Item level; aggregateable by Date, Country, Customer, Product.
-- **Baseline Benchmark Value:** **-£719,656.34** (Reported as negative in ledger accounting, or £719,656.34 absolute).
+- **Baseline Benchmark Value:** **-£719,692.94** in PostgreSQL `NUMERIC`
+  arithmetic (the source float audit remains -£719,656.34).
 - **Mandatory Inclusions:** Physical merchandise items under invoice prefix `'C'`.
 - **Mandatory Exclusions:**
   - Non-product fee reversals (`is_non_product = TRUE`, e.g. reversed Amazon fees, manual fee refunds totaling -£745,647.32).
@@ -73,7 +75,7 @@ This document defines the **canonical mathematical formulas, operational SQL fil
   FROM fact_invoice_lines;
   ```
 - **Dimensional Grain:** Order, Customer, Product, Date.
-- **Baseline Benchmark Value:** **£18,981,283.35**
+- **Baseline Benchmark Value:** **£18,981,261.50**
 - **Business Impact:** This is the primary target variable for company-level merchandise financial reporting.
 
 ---
@@ -97,7 +99,7 @@ This document defines the **canonical mathematical formulas, operational SQL fil
 ### 2.5 Average Order Value (AOV)
 - **Business Definition:** The average gross revenue generated per valid sales transaction.
 - **Mathematical Formula:**
-  $$\text{Average Order Value (AOV)} = \frac{\text{Gross Merchandise Sales}}{\text{Valid Order Count}} = \frac{£19,700,939.69}{39,516}$$
+  $$\text{Average Order Value (AOV)} = \frac{\text{Gross Merchandise Sales}}{\text{Valid Order Count}} = \frac{£19,700,954.44}{39,516}$$
 - **SQL Implementation:**
   ```sql
   SELECT 
@@ -164,22 +166,22 @@ To prevent fabricated analytics and pseudo-scientific modeling, the following me
 
 ```
 Total Ledger Gross Lines (£20,770,293.94)
-  ├── Physical Valid Merchandise Sales ........... £19,700,939.69  (is_valid_sale = TRUE)
+  ├── Physical Valid Merchandise Sales ........... £19,700,954.44  (is_valid_sale = TRUE)
   ├── Non-Product Services & Freight ............ +£821,740.17  (POST, DOT, M, C2, D, S, BANK CHARGES)
   ├── Gift Vouchers & Tested Services ..........   +£1,686.52  (GIFT_0001_*, CRUK, TEST*)
   ├── Promotional / Zero-Price Items ............        £0.00  (is_price_zero = TRUE)
   └── Accounting Bad Debt Credit ................  +£11,062.06  (Invoice A563185)
 
 Total Ledger Deductions (-£1,860,531.82)
-  ├── Physical Merchandise Returns .............   -£719,656.34  (is_cancellation = TRUE & physical)
+  ├── Physical Merchandise Returns .............   -£719,692.94  (is_cancellation = TRUE & physical)
   ├── Service & Fee Reversals ..................   -£745,647.32  (Manual, Amazon fee, Bank charge refunds)
   ├── Bad Debt Accounting Write-offs ...........   -£158,676.14  (Invoices A506401, A516228, A528059, A563186, A563187)
   ├── Negative Non-C Inventory Shrinkage .......        £0.00  (Price = 0.0)
   └── Net Reversal Adjustments .................  -£236,552.02
 
 ========================================================================================
-TOTAL LEDGER NET CASH FLOW ..................... £18,909,762.12  (1,044,848 rows exact sum)
-TOTAL NET MERCHANDISE REVENUE .................. £18,981,283.35  (Gross Sales + Merchandise Returns)
+TOTAL LEDGER NET CASH FLOW ..................... £18,909,762.10  (1,044,848 rows exact sum after NUMERIC rounding)
+TOTAL NET MERCHANDISE REVENUE .................. £18,981,261.50  (Gross Sales + Merchandise Returns)
 ========================================================================================
 ```
 
@@ -188,7 +190,7 @@ TOTAL NET MERCHANDISE REVENUE .................. £18,981,283.35  (Gross Sales +
 ## 5. QA Verification Protocol
 
 Every SQL Data Mart query in `sql/marts/` must be validated against the Python Pandas benchmark before acceptance:
-1. `SUM(line_total)` across all valid sales in `mart_daily_sales` must equal **£19,700,939.69** ($\pm £0.01$).
-2. `SUM(line_total)` across all returns in `mart_daily_sales` must equal **-£719,656.34** ($\pm £0.01$).
+1. `SUM(line_total)` across all valid sales in `mart_daily_sales` must equal **£19,700,954.44** ($\pm £0.01$) after PostgreSQL `NUMERIC(12,2)` line rounding.
+2. `SUM(line_total)` across all returns in `mart_daily_sales` must equal **-£719,692.94** ($\pm £0.01$).
 3. Total unique customers in `mart_customer_snapshot` must equal **5,942**.
-4. Sum of lifetime spend across all 5,942 customers in `mart_customer_snapshot` must equal **£16,405,269.89** (reflecting net spend of identified customers).
+4. Sum of lifetime spend across all 5,942 customers in `mart_customer_snapshot` must equal **£16,411,894.73** (reflecting net spend of identified customers).

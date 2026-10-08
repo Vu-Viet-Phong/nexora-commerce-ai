@@ -818,7 +818,7 @@ Live test-database results using PostgreSQL NUMERIC arithmetic:
 
 - 19,700,954.44 daily gross/valid-sale revenue
 - -719,692.94 physical return value
-- 19,812,261.50 net sales
+- 18,981,261.50 net sales
 - 39,516 distinct invoices
 - 11,221,957 units sold and 469,882 units returned
 - customer-level gross/net: 17,124,940.98 / 16,411,894.73
@@ -830,3 +830,47 @@ view did not filter `source_system='UCI'`. The explicit source filter fixed
 the root cause. The focused integration test then passed. EXPLAIN ANALYZE
 showed hash joins, parallel scans and sort-to-temp as the current
 bottleneck; no speculative index was added.
+
+### Learning Notes (tiếng Việt) — đối soát và QA Milestone 2.4
+
+Ba mart là lớp đọc OLAP trên bốn bảng lõi. `mart_daily_sales` có grain
+`calendar_day + country + is_physical_merchandise`; `mart_customer_daily` có
+grain `customer_id + calendar_day`; `mart_customer_snapshot` có đúng một row
+cho mỗi customer đã nhận diện. Input là `invoice_lines`, ghép với `invoices`
+để lấy ngày hóa đơn chuẩn và ghép `products` để lấy cờ hàng vật lý. Output là
+các measure đã aggregate, không làm thay đổi fact tables.
+
+Trong SQL, `WITH` tạo CTE để lọc input một lần; `JOIN` dùng cả
+`source_system` và business key để không trộn namespace; `GROUP BY` bảo vệ
+grain; `SUM` cộng tiền/quantity; `COUNT(DISTINCT invoice_number)` đếm order
+thay vì đếm line; `CASE` và `FILTER (WHERE ...)` tách valid sale khỏi return;
+`LEFT JOIN` trong snapshot giữ lại 5.942 customer, kể cả 90 customer không có
+valid sale. `line_total` và kết quả tiền dùng PostgreSQL `NUMERIC`, không dùng
+FLOAT, nên so sánh bằng `Decimal` là đúng metric contract.
+
+Đối soát full-data xác nhận gross/valid revenue £19,700,954.44, physical
+return -£719,692.94, net sales £18,981,261.50, 39.516 order, và
+11.221.957/469.882 units sold/returned. Customer mart thấp hơn company mart
+vì 235.287 line guest (`customer_id IS NULL`) không được gán vào RFM. Snapshot
+đạt 5.852 customer có mua và 90 frequency bằng 0; nhóm return-only có thể có
+monetary âm, nhưng AOV phải NULL.
+
+QA kiểm tra thêm join đầy đủ `invoice_lines -> invoices -> products`: đúng
+1.044.848 row, không fan-out, với ledger database £18,909,762.10. Parquet
+audit là £18,909,762.12; chênh £0.02 là do cột generated
+`ROUND(quantity::NUMERIC * unit_price, 2)` làm tròn từng line trước khi SUM,
+không phải mất dữ liệu. Các invariant `net = gross + return`, kiểu
+`pg_typeof(...) = numeric`, uniqueness của từng grain và source filter đều
+được test trực tiếp.
+
+Hai lỗi QA thực tế đã được sửa trong checkpoint này. Assertion ledger ban đầu
+dùng tổng Parquet thay cho tổng database NUMERIC; assertion RFM ban đầu giả
+định mọi frequency-zero customer có monetary bằng 0, trong khi return-only
+customer hợp lệ có monetary âm. Cách khắc phục là tách rõ source-vs-database
+contract và chỉ yêu cầu AOV NULL cho frequency zero.
+
+Runtime đo được bằng `.venv` Python 3.11.16: regression suite **16 passed,
+6 skipped trong 1.55s**; full-data mart reconciliation **1 passed trong
+224.67s**. Test full loader không chạy lại ở checkpoint này; mart test tự tạo
+schema UUID riêng, load trong namespace riêng rồi teardown `CASCADE`, nên
+không đụng database/test schema của worktree khác.

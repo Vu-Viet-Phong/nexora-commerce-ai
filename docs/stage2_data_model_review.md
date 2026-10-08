@@ -156,7 +156,7 @@ JOIN raw_product_descriptions desc ON lines.stock_code = desc.stock_code;
    LEFT JOIN customers c 
        ON l.source_system = c.source_system 
       AND l.customer_id = c.customer_id;
-   -- Must equal: line_count = 1,044,848 AND total_revenue = 18,909,762.12
+   -- Must equal: line_count = 1,044,848 AND total_revenue = 18,909,762.10
    ```
 
 ---
@@ -266,7 +266,7 @@ An independent technical audit of Copilot's Milestone 2.1 delivery was conducted
 | **Total Identified Customers** | `customers` | **5,942 entities** | 0 entities | **PASSED** (5,942 customers) |
 | **Total Unique Products** | `products` | **5,131 products** | 0 products | **PASSED** (5,131 products) |
 | **Missing Customer ID Lines** | `invoice_lines.customer_id IS NULL` | **235,287 rows** | 0 rows | **PASSED** (235,287 rows) |
-| **Total Ledger Net Revenue** | `invoice_lines.line_total` | **£18,909,762.12** | £0.01 | **PASSED** (£18,909,762.12) |
+| **Total Ledger Net Revenue** | `invoice_lines.line_total` | **£18,909,762.10** | £0.01 | **PASSED** (£18,909,762.10; source Parquet £18,909,762.12 before per-line NUMERIC rounding) |
 | **Valid Sales Line Revenue** | `is_valid_sale = TRUE` | **£19,700,954.46** | £0.01 | **PASSED** (£19,700,954.46) |
 | **Physical Returns Revenue** | `is_cancellation = TRUE AND !is_non_product` | **-£719,692.94** | £0.01 | **PASSED** (-£719,692.94) |
 | **Cancellation Line Items** | `is_cancellation = TRUE` | **19,165 rows** | 0 rows | **PASSED** (19,165 rows) |
@@ -312,7 +312,8 @@ An independent technical audit of Copilot's Milestone 2.1 delivery was conducted
 - **Idempotency & Namespace Safety:** Implemented atomic delete-and-reload scoped strictly to `WHERE source_system = 'UCI'`. Re-running loader produces identical counts `(5942, 5131, 53628, 1044848)` with zero duplication. No hazardous global `TRUNCATE CASCADE`.
 - **Atomicity & Transaction Rollback:** Tested live with injected failure `fail_after="copy"`; SQLAlchemy transaction rolled back completely, preserving prior state without corrupted rows.
 - **Financial Reconciliation:**
-  - Total Ledger: **£18,909,762.12** (Exact match).
+  - Total Ledger: **£18,909,762.10** in PostgreSQL (source Parquet
+    **£18,909,762.12**; £0.02 difference from per-line NUMERIC rounding).
   - Physical Returns: **-£719,692.94** (Exact match).
   - Valid Sales: **£19,700,954.44** in SQL (Reconciled with 2-cent rounding contract difference from Parquet float sum £19,700,954.46).
   - Missing Customer Rows: **235,287 rows** (Preserved with `customer_id = NULL`).

@@ -72,6 +72,24 @@ def test_marts_reconcile_grain_and_rfm(database_sandbox) -> None:
         ).scalar_one()
         assert duplicate_customer_daily == 0
 
+        joined_fact_totals = connection.execute(
+            text(
+                """
+                SELECT COUNT(*), SUM(l.line_total)
+                FROM invoice_lines AS l
+                JOIN invoices AS i
+                  ON i.source_system = l.source_system
+                 AND i.invoice_number = l.invoice_number
+                JOIN products AS p
+                  ON p.source_system = l.source_system
+                 AND p.stock_code = l.stock_code
+                WHERE l.source_system = 'UCI'
+                """
+            )
+        ).one()
+        assert joined_fact_totals[0] == 1_044_848
+        assert joined_fact_totals[1] == Decimal("18909762.10")
+
         daily_totals = connection.execute(
             text(
                 """
@@ -95,6 +113,16 @@ def test_marts_reconcile_grain_and_rfm(database_sandbox) -> None:
         assert daily_totals[5] == 11_221_957
         assert daily_totals[6] == 469_882
 
+        assert connection.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM mart_daily_sales
+                WHERE net_sales <> gross_sales + return_value
+                """
+            )
+        ).scalar_one() == 0
+
         customer_totals = connection.execute(
             text(
                 """
@@ -106,6 +134,15 @@ def test_marts_reconcile_grain_and_rfm(database_sandbox) -> None:
         assert customer_totals[0] == Decimal("17124940.98")
         assert customer_totals[1] == Decimal("-713046.25")
         assert customer_totals[2] == Decimal("16411894.73")
+        assert connection.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM mart_customer_daily
+                WHERE net_spend <> gross_spend + return_value
+                """
+            )
+        ).scalar_one() == 0
 
         snapshot = connection.execute(
             text(
@@ -127,5 +164,29 @@ def test_marts_reconcile_grain_and_rfm(database_sandbox) -> None:
         assert snapshot[3] >= 0
         assert snapshot[4] >= snapshot[3]
         assert snapshot[5] > 0
+        assert connection.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM mart_customer_snapshot
+                WHERE frequency = 0
+                  AND average_order_value IS NOT NULL
+                """
+            )
+        ).scalar_one() == 0
+
+        view_numeric_types = connection.execute(
+            text(
+                """
+                SELECT
+                    pg_typeof(gross_sales)::text,
+                    pg_typeof(return_value)::text,
+                    pg_typeof(net_sales)::text
+                FROM mart_daily_sales
+                LIMIT 1
+                """
+            )
+        ).one()
+        assert view_numeric_types == ("numeric", "numeric", "numeric")
 
     engine.dispose()

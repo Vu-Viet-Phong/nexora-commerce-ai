@@ -355,7 +355,7 @@ validation. The live PostgreSQL NUMERIC results were:
 | customers with frequency zero | 90 |
 | daily gross / valid revenue | 19,700,954.44 |
 | daily return value | -719,692.94 |
-| daily net sales | 19,812,261.50 |
+| daily net sales | 18,981,261.50 |
 | daily distinct invoices summed by grain | 39,516 |
 | daily units sold / returned | 11,221,957 / 469,882 |
 | customer gross / return / net | 17,124,940.98 / -713,046.25 / 16,411,894.73 |
@@ -365,7 +365,18 @@ activity is deliberately not attributed to an identified customer. The
 integration test also verifies zero duplicate keys, snapshot count, return
 handling, customer exclusion, and positive AOV for customers with purchases.
 Monetary comparisons use the schema's two-decimal generated `NUMERIC`
-contract, not binary floating-point source sums.
+contract, not binary floating-point source sums. The reconciliation also
+checks the complete fact join (`invoice_lines` to `invoices` and `products`)
+remains exactly 1,044,848 rows with ledger sum £18,909,762.10. The source
+Parquet audit reports £18,909,762.12; the two-penny difference is the
+intentional per-line `NUMERIC(12,2)` rounding performed by the generated
+database column. This is a
+direct fan-out/orphan guard, not only a check on final aggregates. Row-level
+invariants assert `net_sales = gross_sales + return_value` and
+`net_spend = gross_spend + return_value`. PostgreSQL `pg_typeof` checks confirm
+the mart money measures remain `numeric`; the snapshot invariant confirms
+zero-purchase customers have no fabricated AOV. Their monetary value may be
+negative when the source contains return-only activity.
 
 ### Performance evidence
 
@@ -385,6 +396,7 @@ workload and a fresh query plan.
 .\.venv\Scripts\python.exe -m pytest tests -q
 ```
 
-The focused mart integration test passed (`1 passed in 20.73s`). The full
-regression suite is the next required gate before the Milestone 2.4
-checkpoint commit.
+The full-data mart integration test passed (`1 passed in 224.67s`) and the
+final regression suite passed (`16 passed, 6 skipped in 1.55s`). The test
+creates a UUID schema and loads the source only inside that schema; the
+full-data loader/idempotency test was not rerun for this mart checkpoint.
