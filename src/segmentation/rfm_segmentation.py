@@ -45,7 +45,8 @@ def _require_rfm(frame: pd.DataFrame) -> None:
 
 def _quantile_score(values: pd.Series, *, higher_is_better: bool) -> pd.Series:
     ranks = values.rank(method="first", ascending=higher_is_better)
-    scores = pd.qcut(ranks, q=5, labels=False, duplicates="drop") + 1
+    pure_scores = pd.qcut(ranks, q=5, labels=False, duplicates="drop") + 1
+    scores = pure_scores.groupby(values).transform("median").round()
     return scores.astype("Int64")
 
 
@@ -121,14 +122,16 @@ def prepare_rfm_features(frame: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]
     result = frame.loc[:, ["customer_id", *RFM_COLUMNS]].copy()
     for column in RFM_COLUMNS:
         result[column] = pd.to_numeric(result[column], errors="raise").astype(float)
+        
     active_recency = result.loc[result["frequency"] > 0, "recency_days"]
     recency_fill = (
         float(active_recency.max() + 1) if not active_recency.empty else 1.0
     )
-    result["recency_days"] = result["recency_days"].fillna(recency_fill)
+    imputed_recency = result["recency_days"].fillna(recency_fill)
+    
     transformed = pd.DataFrame(
         {
-            "recency_days": signed_log1p(result["recency_days"]),
+            "recency_days": signed_log1p(imputed_recency),
             "frequency": signed_log1p(result["frequency"]),
             "monetary": signed_log1p(result["monetary"]),
         },
@@ -190,9 +193,20 @@ def fit_kmeans(
     model = KMeans(n_clusters=k, random_state=random_state, n_init=20)
     result = source.copy()
     result["cluster"] = model.fit_predict(scaled)
+    
     scaler = StandardScaler()
+    active_recency = source.loc[source["frequency"] > 0, "recency_days"]
+    recency_fill = (
+        float(active_recency.max() + 1) if not active_recency.empty else 1.0
+    )
+    imputed_recency = source["recency_days"].fillna(recency_fill)
     transformed = pd.DataFrame(
-        {column: signed_log1p(source[column]) for column in RFM_COLUMNS}
+        {
+            "recency_days": signed_log1p(imputed_recency),
+            "frequency": signed_log1p(source["frequency"]),
+            "monetary": signed_log1p(source["monetary"]),
+        },
+        index=source.index
     )
     scaler.fit(transformed)
     return result, model, scaler

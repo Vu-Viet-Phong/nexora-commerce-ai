@@ -43,11 +43,13 @@ def test_negative_monetary_is_preserved_by_signed_transform() -> None:
     assert np.isfinite(scaled).all()
 
 
-def test_inactive_customer_missing_recency_is_imputed_to_worst_value() -> None:
+def test_inactive_customer_missing_recency_is_kept_null_in_raw() -> None:
     frame = rfm_fixture()
     frame.loc[7, "recency_days"] = np.nan
-    source, _ = prepare_rfm_features(frame)
-    assert source.loc[source["customer_id"] == 8, "recency_days"].item() == 81
+    source, scaled = prepare_rfm_features(frame)
+    assert pd.isna(source.loc[source["customer_id"] == 8, "recency_days"].item())
+    # Should be valid in scaled
+    assert np.isfinite(scaled).all()
 
 
 def test_kmeans_is_deterministic_and_assigns_every_customer() -> None:
@@ -86,3 +88,28 @@ def test_invalid_and_empty_inputs_are_rejected() -> None:
         )
     with pytest.raises(ValueError, match="number of customers"):
         evaluate_kmeans(np.empty((0, 3)), k_values=(2,))
+
+
+def test_rfm_scoring_is_permutation_invariant() -> None:
+    frame1 = rfm_fixture()
+    frame2 = frame1.sample(frac=1, random_state=42).reset_index(drop=True)
+    
+    scored1 = add_rfm_scores(frame1)
+    scored2 = add_rfm_scores(frame2)
+    
+    scored1_sorted = scored1.sort_values("customer_id").reset_index(drop=True)
+    scored2_sorted = scored2.sort_values("customer_id").reset_index(drop=True)
+    
+    pd.testing.assert_frame_equal(scored1_sorted, scored2_sorted)
+
+
+def test_rfm_scoring_assigns_same_score_to_ties() -> None:
+    frame = rfm_fixture()
+    # Create a tie in frequency
+    frame.loc[0, "frequency"] = 10
+    frame.loc[1, "frequency"] = 10
+    scored = add_rfm_scores(frame)
+    # They should have the same frequency_score
+    f_score_0 = scored.loc[scored["customer_id"] == 1, "frequency_score"].item()
+    f_score_1 = scored.loc[scored["customer_id"] == 2, "frequency_score"].item()
+    assert f_score_0 == f_score_1
