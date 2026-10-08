@@ -113,3 +113,20 @@ def test_rfm_scoring_assigns_same_score_to_ties() -> None:
     f_score_0 = scored.loc[scored["customer_id"] == 1, "frequency_score"].item()
     f_score_1 = scored.loc[scored["customer_id"] == 2, "frequency_score"].item()
     assert f_score_0 == f_score_1
+
+
+def test_compare_segments_rejects_mismatched_customers() -> None:
+    from src.segmentation.rfm_segmentation import compare_segments_and_clusters
+    scored = add_rfm_scores(rfm_fixture())
+    segmented = segment_by_rfm_rules(scored)
+    assignments, _, _ = fit_kmeans(rfm_fixture(), k=2)
+    
+    # Drop one customer from assignments
+    assignments_missing = assignments.iloc[1:]
+    with pytest.raises(ValueError, match="customer_id sets do not match"):
+        compare_segments_and_clusters(segmented, assignments_missing)
+        
+    # Duplicate customer_id
+    assignments_dup = pd.concat([assignments, assignments.iloc[[0]]])
+    with pytest.raises(ValueError, match="unique in both dataframes"):
+        compare_segments_and_clusters(segmented, assignments_dup)

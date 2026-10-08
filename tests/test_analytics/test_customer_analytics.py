@@ -106,3 +106,29 @@ def test_feature_validation_rejects_recency_for_inactive() -> None:
     frame.loc[1, "recency_days"] = 10  # freq is 0 here
     with pytest.raises(ValueError, match="must be NULL when frequency == 0"):
         validate_customer_features(frame)
+
+
+def test_temporal_leakage_warning() -> None:
+    from src.analytics.customer_analytics import fetch_customer_features
+    from unittest.mock import MagicMock
+    import warnings
+    
+    mock_engine = MagicMock()
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        try:
+            # We mock pd.read_sql and validate_customer_features
+            import pandas as pd
+            from src.analytics import customer_analytics
+            original_read = pd.read_sql
+            original_val = customer_analytics.validate_customer_features
+            pd.read_sql = MagicMock(return_value=pd.DataFrame())
+            customer_analytics.validate_customer_features = MagicMock()
+            
+            fetch_customer_features(mock_engine, as_of_date=date(2010, 1, 1))
+            
+            assert len(w) == 1
+            assert "Temporal leakage" in str(w[-1].message)
+        finally:
+            pd.read_sql = original_read
+            customer_analytics.validate_customer_features = original_val

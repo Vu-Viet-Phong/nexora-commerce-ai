@@ -237,6 +237,20 @@ def compare_segments_and_clusters(
     """Cross-tab experimental RFM labels against unsupervised clusters."""
     if "rfm_segment" not in segmented.columns or "cluster" not in assignments.columns:
         raise ValueError("both RFM segments and clusters are required")
+        
+    if segmented["customer_id"].duplicated().any() or assignments["customer_id"].duplicated().any():
+        raise ValueError("customer_id must be unique in both dataframes")
+        
+    seg_ids = set(segmented["customer_id"])
+    assign_ids = set(assignments["customer_id"])
+    
+    if seg_ids != assign_ids:
+        raise ValueError(
+            f"customer_id sets do not match. "
+            f"Missing in assignments: {len(seg_ids - assign_ids)}, "
+            f"missing in segmented: {len(assign_ids - seg_ids)}"
+        )
+
     merged = segmented[["customer_id", "rfm_segment"]].merge(
         assignments[["customer_id", "cluster"]],
         on="customer_id",

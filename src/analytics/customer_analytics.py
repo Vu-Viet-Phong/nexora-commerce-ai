@@ -232,7 +232,22 @@ def fetch_customer_features(
     *,
     as_of_date: date = date(2011, 12, 10),
 ) -> pd.DataFrame:
-    """Fetch bounded customer features; only the customer-level result enters RAM."""
+    """Fetch bounded customer features; only the customer-level result enters RAM.
+    
+    LIMITATION: The 'customers' dimension table (e.g. primary_country) is not
+    currently point-in-time correct. It contains the most recent state or 
+    aggregated lifetime attributes. True historical backtesting is not fully
+    supported for these dimensions.
+    """
+    # Guard against using historical dates which would leak future dimension info
+    if as_of_date < date(2011, 12, 10):
+        import warnings
+        warnings.warn(
+            "Temporal leakage warning: Customer dimension attributes are not "
+            "point-in-time correct. Historical backtesting may leak future information.",
+            UserWarning
+        )
+
     frame = pd.read_sql(
         text(CUSTOMER_FEATURES_SQL),
         engine,
