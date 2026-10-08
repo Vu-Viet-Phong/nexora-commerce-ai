@@ -702,6 +702,24 @@ ordinal được lưu để truy nguyên file nguồn. `line_total` là generate
 Chi tiết lý thuyết, ví dụ SQL, kiểm thử static/integration và các giới hạn
 runtime của Milestone 2.2 được ghi tại
 [`docs/learning/stage_02_postgresql_sql.md`](learning/stage_02_postgresql_sql.md).
-Static tests và processed-source reconciliation đã chạy; live PostgreSQL DDL
-chưa chạy vì Docker/Compose/psql chưa khả dụng. Database-level reconciliation
-được để lại như điều kiện của Milestone 2.3.
+Static tests và processed-source reconciliation đã chạy. PostgreSQL 16 native
+trên Windows cũng đã được xác minh qua SQLAlchemy và `psycopg` với database
+test riêng `nexora_commerce_test`; Docker không được tiếp tục troubleshoot
+trong milestone này.
+
+Integration test tự đọc `.env` trong process Python, vì vậy không phụ thuộc
+environment của terminal khác. Test apply `sql/schema.sql`, kiểm tra metadata
+PK/FK/UNIQUE, indexes và NUMERIC, rồi kiểm tra NULL customer, generated
+`line_total`, invalid FK, duplicate source identity và savepoint rollback.
+Kết quả runtime: **1 passed**.
+
+Lỗi thực tế đầu tiên là password local có ký tự `@` chưa URL-encode, làm
+hostname bị phân tích sai. Loader test chuẩn hóa giá trị đó mà không log
+credential; cách cấu hình chuẩn vẫn là percent-encode ký tự đặc biệt trong
+`.env`. Sau lỗi integrity, PostgreSQL cần rollback savepoint trước khi chạy
+statement tiếp theo, nếu không sẽ báo `InFailedSqlTransaction`.
+
+Database chính được kiểm tra read-only trước DDL: đúng `nexora_commerce` và
+không có target tables. Sau đó schema được apply thành công với 4 tables;
+không drop hoặc ghi đè dữ liệu hiện có. Full suite kết thúc **20 passed**.
+Milestone 2.3 chưa bắt đầu và vẫn chờ nghiệm thu.

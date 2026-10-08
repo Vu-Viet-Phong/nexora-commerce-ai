@@ -12,10 +12,8 @@ AI:
 
 The source is `data/processed/transactions_clean.parquet`. The processed
 source is read-only. Static schema and source reconciliation tests run locally.
-Live PostgreSQL execution is still pending because Docker, Docker Compose and
-`psql` are not available in the current environment. The optional integration
-test is skipped unless `NEXORA_TEST_DATABASE_URL` points to a dedicated test
-database.
+Live PostgreSQL verification uses the native PostgreSQL 16 service on Windows;
+Docker is intentionally out of scope for this milestone.
 
 ## Grain
 
@@ -95,18 +93,35 @@ ROUND(quantity::NUMERIC * unit_price, 2)
 The quantity and price inputs are non-null, so `line_total` is declared
 `NOT NULL`.
 
-## Schema application
+## Native Windows configuration and schema application
 
 `sql/schema.sql` is a PostgreSQL DDL transaction. It creates tables,
 constraints and indexes, then commits. If a statement fails, PostgreSQL
 rolls the transaction back. The schema is intended for a clean test database;
 loader rebuild/idempotency behavior belongs to Milestone 2.3.
 
-The current environment cannot execute this file because Docker, Docker
-Compose and `psql` are unavailable. No live DDL result is reported as PASS.
-When a dedicated test database is available, set
-`NEXORA_TEST_DATABASE_URL` and run the optional integration tests. Do not point
-that variable at a database containing real user data.
+The local configuration is stored in a Git-ignored `.env` at the project root:
+
+```text
+DATABASE_URL=postgresql+psycopg://nexora_app:<url-encoded-password>@localhost:5432/nexora_commerce
+NEXORA_TEST_DATABASE_URL=postgresql+psycopg://nexora_app:<url-encoded-password>@localhost:5432/nexora_commerce_test
+```
+
+The password is never committed or printed. The integration test loads `.env`
+inside the Python process, rather than relying on inheritance from another
+terminal. It also normalizes a local password containing `@` before creating
+the SQLAlchemy URL; URL-encoding the password in `.env` remains preferred.
+
+The concrete command was:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_sql\test_postgres_integration.py -vv
+```
+
+The test drops only the four target tables in the dedicated
+`nexora_commerce_test` database, applies `sql/schema.sql` in one transaction,
+and verifies runtime metadata and behavior. This is safe for the test
+database because it is explicitly separate from the main database.
 
 ## Integration testing
 
@@ -114,10 +129,15 @@ Static tests verify DDL declarations and processed-source ground truth. They
 cover table names, keys, nullable customer fields, money types, quality flags,
 source identity and source counts.
 
-The optional PostgreSQL test applies the schema and checks the four public
-tables. Further runtime checks required before Loader acceptance include
-foreign-key rejection, duplicate source identity rejection, NULL customer
-insertion, generated line total precision, and transaction rollback.
+The live PostgreSQL test passed (`1 passed`). It verifies SQLAlchemy/psycopg
+connectivity, all four tables, primary keys, foreign keys, UNIQUE constraints,
+indexes, NUMERIC money columns, nullable customer IDs, generated
+`line_total = 19.99`, invalid FK rejection, duplicate source identity
+rejection, and savepoint rollback.
+
+PostgreSQL marks a transaction as failed after a constraint error. Each test
+case therefore rolls back its savepoint before issuing the next assertion;
+otherwise PostgreSQL returns `InFailedSqlTransaction`.
 
 ## Join cardinality and fan-out
 
@@ -169,3 +189,28 @@ claimed yet.
   dictionary.
 - Expanded the ERD to show every line-level quality flag and documented
   provenance uniqueness.
+- Native Windows PostgreSQL was used instead of Docker because Docker was
+  unavailable; Docker troubleshooting was deliberately not continued.
+- The first connection attempt exposed a malformed local URL caused by an
+  unescaped `@` in the password. The test loader normalizes that value
+  without logging it; future `.env` values should percent-encode special
+  characters.
+
+## Reproducible commands and outcome
+
+```powershell
+git check-ignore --verbose .env
+.\.venv\Scripts\python.exe -m pytest tests\test_sql\test_postgres_integration.py -vv
+.\.venv\Scripts\python.exe -m pytest tests -q
+```
+
+Observed results:
+
+- `.env` matched `.gitignore` and was never staged.
+- PostgreSQL test connection succeeded through SQLAlchemy/psycopg.
+- Schema apply and runtime integration test: **1 passed**.
+- Full suite: **20 passed in 2.60s**.
+- The main database safety check confirmed `nexora_commerce`, zero existing
+  target tables and no rows to overwrite. The schema was then applied and
+  verified as four created tables. No destructive statement was run against
+  existing main data.
