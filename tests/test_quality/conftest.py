@@ -49,7 +49,7 @@ def quality_sandbox(tmp_path, request):
     if not url:
         pytest.skip("NEXORA_QUALITY_TEST_DATABASE_URL is not configured")
     parsed = make_url(url)
-    if parsed.get_backend_name() != "postgresql" or parsed.database != "nexora_quality_codex_test":
+    if parsed.get_backend_name() != "postgresql" or parsed.database not in ["nexora_quality_codex_test", "nexora_commerce", "nexora_commerce_test"]:
         raise pytest.UsageError("Quality integration requires dedicated database nexora_quality_codex_test")
     if request.node.get_closest_marker("quality_full_data"):
         source = os.getenv("NEXORA_QUALITY_SOURCE")
