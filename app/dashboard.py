@@ -174,8 +174,8 @@ def main():
 
         try:
             min_date, max_date, country_options = fetch_metadata(engine)
-        except Exception as exc:
-            st.error(f"Error loading metadata: {exc}")
+        except Exception:
+            st.error("An error occurred while loading metadata from the database.")
             st.stop()
 
         # Date range picker
@@ -260,19 +260,19 @@ def main():
                 st.caption(f"Net realization: {net_rate:.1f}%")
             with col4:
                 st.metric(
-                    label="Total Orders",
-                    value=f"{kpis['total_orders']:,}",
-                    help="Count of unique valid sales invoices.",
+                    label="Invoice Segments",
+                    value=f"{kpis['invoice_segments']:,}",
+                    help="Count of invoice segments (note: an invoice spanning multiple classifications is counted once per classification).",
                 )
                 st.caption(f"Units sold: {kpis['units_sold']:,}")
             with col5:
                 st.metric(
-                    label="Average Order Value",
-                    value=f"£{kpis['aov']:,.2f}",
-                    help="Average net revenue per order invoice.",
+                    label="Average Order Value (Net)",
+                    value=f"£{kpis['net_aov']:,.2f}",
+                    help="Average net revenue per invoice segment.",
                 )
-                items_per_order = (kpis['units_sold'] / kpis['total_orders']) if kpis['total_orders'] > 0 else 0.0
-                st.caption(f"Avg items/order: {items_per_order:.1f}")
+                items_per_order = (kpis['units_sold'] / kpis['invoice_segments']) if kpis['invoice_segments'] > 0 else 0.0
+                st.caption(f"Gross AOV: £{kpis['gross_aov']:,.2f} | Items/segment: {items_per_order:.1f}")
 
             st.divider()
 
@@ -333,14 +333,14 @@ def main():
                 if not country_with_shares.empty:
                     display_geo = country_with_shares.copy()
                     display_geo.columns = [
-                        "Country", "Gross Sales (£)", "Returns (£)", "Net Sales (£)", "Orders", "Market Share (%)"
+                        "Country", "Gross Sales (£)", "Returns (£)", "Net Sales (£)", "Invoice Segments", "Market Share (%)"
                     ]
                     st.dataframe(
                         display_geo.style.format({
                             "Gross Sales (£)": "£{:,.2f}",
                             "Returns (£)": "£{:,.2f}",
                             "Net Sales (£)": "£{:,.2f}",
-                            "Orders": "{:,.0f}",
+                            "Invoice Segments": "{:,.0f}",
                             "Market Share (%)": "{:.2f}%",
                         }),
                         use_container_width=True,
@@ -380,13 +380,14 @@ def main():
                         use_container_width=True,
                     )
 
-        except DatabaseQueryError as err:
-            st.error(f"Query error in Sales Overview: {err}")
+        except DatabaseQueryError:
+            st.error("Query error in Sales Overview: Unable to retrieve data safely.")
 
     # ========================================================================
     # TAB 2: CUSTOMER ANALYTICS (Checkpoint C Implementation)
     # ========================================================================
     with tab_customers:
+        st.info("ℹ️ **Note:** Customer metrics (e.g., Lifetime Spend, Top Customers) reflect a **Lifetime Snapshot** up to the reference date (2011-12-10) and are not strictly bounded by the selected date range filter. The Daily Active Buyers trend is the only metric here affected by the date filter.")
         try:
             cust_kpis, cust_trend, top_cust, freq_tiers, mon_brackets = fetch_customer_data(
                 engine, start_date=start_date, end_date=end_date, country=country_choice
@@ -520,13 +521,14 @@ def main():
             else:
                 st.info("No VIP customer records available.")
 
-        except DatabaseQueryError as err:
-            st.error(f"Query error in Customer Analytics: {err}")
+        except DatabaseQueryError:
+            st.error("Query error in Customer Analytics: Unable to retrieve data safely.")
 
     # ========================================================================
     # TAB 3: RFM SEGMENTATION (Checkpoint D Implementation)
     # ========================================================================
     with tab_rfm:
+        st.info("ℹ️ **Note:** RFM Segmentation reflects a **Lifetime Snapshot** up to the reference date (2011-12-10). It evaluates the entire customer history and is not affected by the date range filter.")
         try:
             rfm_data = fetch_rfm_data(engine, country=country_choice)
 
@@ -704,8 +706,8 @@ def main():
             else:
                 st.info("No RFM data available.")
 
-        except DatabaseQueryError as err:
-            st.error(f"Query error in RFM Segmentation: {err}")
+        except DatabaseQueryError:
+            st.error("Query error in RFM Segmentation: Unable to retrieve data safely.")
 
 
 if __name__ == "__main__":

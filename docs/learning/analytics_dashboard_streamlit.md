@@ -424,3 +424,28 @@ tests/test_dashboard.py::test_missing_table_raises_database_query_error PASSED
    **Trả lời:** Vì mỗi lần người dùng bấm lọc, Streamlit sẽ re-run script. Query 1 triệu dòng qua mạng hoặc vào RAM sẽ làm nghẽn CPU và bộ nhớ, trong khi SQL Mart `mart_daily_sales` đã aggregate sẵn chỉ còn 3,160 dòng, phản hồi dưới 15ms.
 2. *Làm thế nào để xử lý 90 khách hàng có `recency_days` là NULL trong phân tích RFM?*  
    **Trả lời:** Gán giá trị recency phạt cao hơn ngày tối đa (`max + 365`), cho điểm `r_score = 1` và xếp vào nhóm khách hàng `Lost` hoặc `Hibernating`.
+
+## 17. Sửa Lỗi PR #3 (Analytics Dashboard) - Hậu Kiểm (Post-Review Fixes)
+
+Trong quá trình review PR #3 (`feat/analytics-dashboard`), một số lỗi nghiêm trọng về logic tính toán và tích hợp đã được phát hiện và sửa chữa.
+
+### 17.1. Lỗi đếm số lượng đơn hàng (Order Count & AOV)
+- **Nguyên nhân:** Mart `mart_daily_sales` có grain là `(calendar_day, country, is_physical_merchandise)`. Việc dùng `SUM(distinct_invoices)` trên toàn bộ mart sẽ dẫn đến tình trạng **double-count** (đếm trùng) nếu một hóa đơn chứa cả Physical Merchandise và Non-Physical Merchandise.
+- **Giải pháp:** 
+  - Đổi tên metric `Total Orders` thành `Invoice Segments` trên Dashboard để phản ánh đúng bản chất grain của SQL Mart.
+  - Tách `AOV` thành `Average Order Value (Net)` và `Gross AOV` (caption) tính theo Invoice Segments.
+  - Cập nhật tooltip trên UI giải thích rõ ràng về Invoice Segments.
+
+### 17.2. Lỗi Market Share (Thị phần)
+- **Nguyên nhân:** Hàm `calculate_country_shares()` trước đây chia cho tổng của top 10 quốc gia hiển thị trên bảng, dẫn đến nếu chỉ lọc top 10 hoặc filter 1 quốc gia, thị phần luôn hiển thị 100%. 
+- **Giải pháp:** Truyền `total_net_sales` của **toàn bộ thị trường** (toàn bộ data set chưa bị limit 10) từ KPI card vào làm denominator. Tránh trường hợp denominator là âm hoặc bằng 0 bằng cách kiểm tra điều kiện nghiêm ngặt.
+
+### 17.3. Lỗi Tích hợp RFM (RFM Integration)
+- **Nguyên nhân:** Branch Dashboard tự triển khai lại logic tính toán RFM (`compute_rfm_segments`) một cách độc lập bằng `.rank()`. Điều này tạo ra hai metric contracts mâu thuẫn giữa Machine Learning pipeline (PR #2) và Dashboard (PR #3), đặc biệt khi xử lý quantile boundaries bị trùng (ties).
+- **Giải pháp:** Tích hợp trực tiếp module từ PR #2 bằng cách merge branch và gọi hàm `add_rfm_scores` và `segment_by_rfm_rules` từ `src.segmentation.rfm_segmentation` bên trong hàm `compute_rfm_segments`. Mapping lại tên cột cho phù hợp với Dashboard.
+
+### 17.4. Bảo mật & Trải nghiệm Người Dùng
+- **Bảo mật Exception:** Khi truy vấn DB gặp lỗi (ví dụ sai credentials), Streamlit bắt exception và ném ra bằng `st.error(exc)`. SQL exceptions thường chứa nguyên văn connection string bao gồm mật khẩu hoặc cấu trúc bảng. Đã sửa lại catch chung `Exception` hoặc `DatabaseQueryError` và chỉ trả ra thông báo lỗi chung chung an toàn.
+- **Lifetime vs Filter:** Thêm các Warning (`st.info()`) vào tab Customer Analytics và RFM để làm rõ rằng hầu hết các chỉ số khách hàng là **Lifetime Snapshot** và không bị ảnh hưởng bởi Data Range Filter.
+- **Label 0 Orders:** Đổi nhãn `0 Orders (Refunds Only)` thành `0 Orders (Registered/No Purchase)` vì không phải tất cả người có 0 đơn hàng đều là trả hàng, mà có thể là người dùng đăng ký chưa mua.
+- **Sửa lỗi Pandas `read_sql_query`:** Tránh lỗi tương thích DBAPI2 (TypeError: Query must be a string) bằng cách execute câu lệnh SQLAlchemy Native qua `conn.execute()` và tạo DataFrame từ kết quả `result.fetchall()`.

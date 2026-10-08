@@ -188,10 +188,11 @@ def test_get_sales_kpis_all_filters(sqlite_engine):
     assert kpis["gross_sales"] == 1750.0
     assert kpis["return_value"] == -150.0
     assert kpis["net_sales"] == 1600.0
-    assert kpis["total_orders"] == 19
+    assert kpis["invoice_segments"] == 19
     assert kpis["units_sold"] == 172
     assert kpis["units_returned"] == 15
-    assert kpis["aov"] == round(1600.0 / 19, 2)
+    assert kpis["net_aov"] == round(1600.0 / 19, 2)
+    assert kpis["gross_aov"] == round(1750.0 / 19, 2)
     assert kpis["return_rate_pct"] == round(150.0 / 1750.0 * 100, 2)
 
 
@@ -201,7 +202,7 @@ def test_get_sales_kpis_filtered_by_country_and_date(sqlite_engine):
     kpis = get_sales_kpis(sqlite_engine, start_date=start, end_date=end, country="United Kingdom")
     assert kpis["gross_sales"] == 1050.0
     assert kpis["net_sales"] == 950.0
-    assert kpis["total_orders"] == 12
+    assert kpis["invoice_segments"] == 12
 
 
 def test_get_daily_sales_trend(sqlite_engine):
@@ -238,7 +239,7 @@ def test_resample_sales_trend_weekly_and_monthly(sqlite_engine):
     monthly = resample_sales_trend(daily, frequency="Monthly")
     assert len(monthly) == 1  # all 3 days are in Jan 2010
     assert round(monthly["net_sales"].sum(), 2) == round(daily_net_sum, 2)
-    assert monthly.iloc[0]["total_orders"] == daily["total_orders"].sum()
+    assert monthly.iloc[0]["invoice_segments"] == daily["invoice_segments"].sum()
 
 
 def test_calculate_country_shares(sqlite_engine):
